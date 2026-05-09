@@ -183,27 +183,70 @@ same protocol stack the browser already has.
 
 ## Provisioning (`pi-setup.sh`)
 
-The on-Pi installer does, in order:
+The on-Pi installer is a single bash script
+(`services/doorbell-firmware/pi-setup.sh`) you run after flashing
+Pi OS Lite 64-bit. It does, in order:
 
-1. Confirm we're on a fresh Pi OS Lite 64-bit, refuse otherwise.
-2. `apt-get install -y python3-gpiozero python3-requests ffmpeg`.
-3. Download the pinned MediaMTX release tarball, verify SHA256 against
-   a hash committed to this repo, install to `/usr/local/bin`.
-4. Prompt for: host hostname, host TLS fingerprint (or "I'll use a real
-   cert"), device label (default `front-door`).
-5. Generate a fresh device token, POST `/api/doorbell/register` to the
-   host (one-time bearer-less flow gated on the host being in "pairing
-   mode" — a 5-minute window opened from the host's web UI).
-6. Write `/etc/openring/secrets.env` mode 600.
-7. Install three systemd units:
-   - `openring-mediamtx.service` (RTSP server)
-   - `openring-button.service` (button + heartbeat)
-   - `openring-audio.service` (deferred to v0.3, stub for now)
-8. `systemctl enable --now` all three. Print "online" or the failure.
+1. **Sanity checks.** Confirms it's running on a Raspberry Pi (warns
+   otherwise) and resolves a supported architecture
+   (`aarch64` → `arm64`, `armv7l` → `armv7`, `x86_64` → `amd64` for
+   dev). Refuses to run as non-root unless `--dry-run` is passed.
+2. **`apt-get install`** of `python3`, `python3-gpiozero`,
+   `python3-requests`, `libcamera-apps`, `ffmpeg`, `iw`, `curl`, `jq`,
+   `ca-certificates`, `gettext-base`. All idempotent.
+3. **`openring` user + directories.** Service user with `gpio` and
+   `video` groups; `/opt/openring`, `/var/lib/openring`, `/etc/openring`.
+4. **Pinned MediaMTX install.** Downloads
+   `mediamtx_v<version>_linux_<arch>.tar.gz` from the GitHub release,
+   verifies SHA256 against `services/doorbell-firmware/mediamtx.sha256`
+   in this repo (which carries the upstream-published checksums for
+   the pinned version), installs the binary to `/usr/local/bin`.
+   Skips the download if the right version is already present.
+   `--skip-hash` overrides verification (development only).
+5. **Pairing.** Auto-generates a 32-char RTSP password (overridable
+   via `--rtsp-password`) and POSTs `/api/doorbell/register` to the
+   host. The endpoint is bearer-less but gated on a 5-minute pairing
+   window the operator opens from the web UI; if the window is closed
+   the script exits with a clear error pointing back at the UI step.
+   The response carries a fresh device token that's immediately
+   written to disk and never logged.
+6. **`/etc/openring/secrets.env`** (root:openring 0640) carrying
+   `HOST_BASE_URL`, `DEVICE_ID`, `DEVICE_TOKEN`, `RTSP_PASSWORD`,
+   `VERSION`. Read by every device-side service via
+   `common.load_settings()`.
+7. **`/etc/openring/mediamtx.yml`** rendered from the in-repo
+   template via `envsubst`, with the RTSP password substituted in.
+8. **systemd units installed** — `openring-mediamtx.service`,
+   `openring-button.service`, `openring-heartbeat.service` —
+   `daemon-reload`ed and `enable --now`ed. The script reports each
+   unit's `is-active` state on completion.
+9. **Output the camera YAML snippet** the operator pastes into
+   `openring.yml` on the host so the detector can pull this Pi's
+   stream:
+   ```yaml
+   - name: front-door
+     rtsp_url: "rtsp://openring:<password>@<pi-hostname>:8554/door"
+     enabled: true
+     resolution: 720
+     notification_rules:
+       - class_name: doorbell_press
+         channels: [phone-ntfy]
+       - class_name: person
+         channels: [phone-ntfy]
+   ```
 
 The whole thing takes under two minutes on a stock Pi. The only secret
 that ever leaves the device is the one-time pairing handshake — after
-that, every call is a Bearer-authenticated POST.
+that, every call is a Bearer-authenticated POST. Re-running the script
+during a fresh pairing window rotates the device token (host-side this
+is an `INSERT-or-UPDATE` on `device_tokens`); the device's identity
+in the host's registry is preserved.
+
+`--dry-run` prints every step without touching the system or making
+the network call — useful for validating arguments before committing.
+
+CI runs the script with `bash -n`, `--help`, and `--dry-run` plus
+shellcheck on every PR.
 
 ## Failure modes we explicitly handle
 
@@ -241,21 +284,22 @@ that, every call is a Bearer-authenticated POST.
 
 ```
 services/doorbell-firmware/
-├── pi-setup.sh                  # the installer
-├── pi-setup.update.sh           # idempotent re-run for upgrades
+├── pi-setup.sh                  # the installer (idempotent)
+├── mediamtx.sha256              # SHA256 hashes for the pinned MediaMTX release
+├── requirements.txt             # Python deps (gpiozero, requests)
 ├── src/
-│   ├── button.py                # GPIO button → host POST
+│   ├── button.py                # GPIO button → host POST, on-disk retry queue
 │   ├── heartbeat.py             # periodic telemetry POST
-│   ├── audio_relay.py           # v0.3 stub
-│   └── common.py                # shared HTTP client w/ retry
+│   └── common.py                # shared HTTP client w/ retry + auth
 ├── systemd/
 │   ├── openring-mediamtx.service
 │   ├── openring-button.service
-│   └── openring-audio.service
+│   └── openring-heartbeat.service
 ├── config/
-│   └── mediamtx.yml.template    # rendered by pi-setup.sh
-└── tests/
-    └── test_button.py            # GPIO mocked via gpiozero's MockPin
+│   └── mediamtx.yml.template    # rendered by pi-setup.sh via envsubst
+└── tests/                       # pytest, GPIO mocked via gpiozero's MockFactory
+    ├── test_button.py
+    └── test_common.py
 ```
 
 All Python on the device targets Python 3.11 (Pi OS Bookworm default).
