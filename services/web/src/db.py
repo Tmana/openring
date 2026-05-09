@@ -1,15 +1,19 @@
 """SQLite access for detection events.
 
 The detector service is the primary writer (INSERTs).  The web service writes
-only to the ``feedback`` and ``corrected_class`` columns via UPDATE.
+only to the ``feedback`` and ``corrected_class`` columns via UPDATE — and,
+since v0.1, synthetic doorbell-press events via ``insert_doorbell_event``.
 """
 
+import json
 import os
 import sqlite3
+import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 DB_PATH = os.environ.get("DB_PATH", "/data/openring.db")
+DOORBELL_PRESS_CLASS = "doorbell_press"
 
 
 def _date_to_exclusive(date_str: str) -> str:
@@ -453,6 +457,60 @@ def set_app_state(key: str, value: str) -> None:
             conn.commit()
     except Exception:
         pass
+
+
+# ── Doorbell event insert (v0.1) ───────────────────────────────────────────
+
+
+def insert_doorbell_event(
+    camera_name: str,
+    snapshot_path: str | None,
+    actions_triggered: list[str] | None,
+    feedback_token: str | None = None,
+    timestamp: datetime | None = None,
+) -> tuple[int, str]:
+    """Persist a synthetic ``doorbell_press`` event row.
+
+    Detection events are normally written by the detector service.  A
+    doorbell press has no detector pipeline behind it, so the press
+    handler in ``routes/doorbell.py`` writes the event directly here.
+
+    Returns ``(event_id, feedback_token)``.
+
+    *actions_triggered* semantics match the detector:
+      - ``None`` → notification rules exist but no rule matched (suppress)
+      - ``[]``   → no rules configured (notify all enabled channels)
+      - ``[..]`` → notify only these named channels
+
+    *feedback_token* is generated when omitted so the events page can
+    serve the snapshot via ``/feedback/{token}/snapshot`` like any other
+    event.
+    """
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc)
+    if feedback_token is None:
+        feedback_token = uuid.uuid4().hex
+    actions_json = json.dumps(actions_triggered) if actions_triggered is not None else None
+    with _connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO detection_events
+                (timestamp, class_name, confidence, camera_name, snapshot_path,
+                 actions_triggered, feedback_token)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                timestamp.isoformat(),
+                DOORBELL_PRESS_CLASS,
+                1.0,
+                camera_name,
+                snapshot_path,
+                actions_json,
+                feedback_token,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0), feedback_token
 
 
 # ── Doorbell pairing window (v0.1) ─────────────────────────────────────────

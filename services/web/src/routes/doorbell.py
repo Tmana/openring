@@ -32,14 +32,17 @@ gating instead of cookies.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import auth as auth_module
+import config_store
 import db
 import redis.asyncio as aioredis
 from event_signing import load_key_from_env, sign_event
@@ -52,6 +55,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/doorbell")
 
 DOORBELL_CHANNEL = "openring:doorbell"
+SNAPSHOT_REQUEST_CHANNEL = "openring:snapshot:request"
+SNAPSHOT_TIMEOUT_SECONDS = 5.0
 AUTH_DB_PATH = os.environ.get("AUTH_DB_PATH", "/data/auth.db")
 
 # device_id format mirrors a hostname: lowercase letters, digits, dashes.
@@ -243,11 +248,18 @@ async def heartbeat(request: Request) -> Response:
 
 @router.post("/press")
 async def press(request: Request) -> Response:
-    """Record a button press and publish on ``openring:doorbell``.
+    """Record a button press: grab a snapshot, write an event row, publish.
 
-    Returns 202 — the notifier picks the event up over Redis and any
-    snapshot capture / event-row insert is the detector's job
-    (ROADMAP issue #4).
+    Returns 202 — fast path so the Pi-side button service can return
+    quickly.  All of the side effects (snapshot RPC to the detector,
+    detection_events row insert, HMAC-signed publish on
+    ``openring:doorbell``) happen synchronously here so a successful
+    response means the press is fully committed.
+
+    Snapshot capture failure is non-fatal: we still record the press
+    with ``snapshot_path=None`` rather than dropping it on the floor.
+    A doorbell press with no image is still better signal than no event
+    at all (someone *did* push the button).
     """
     device = _device_from_request(request)
     if device is None:
@@ -262,52 +274,167 @@ async def press(request: Request) -> Response:
     # Trust the device's reported press timestamp for telemetry only;
     # use the host's clock as the authoritative "received at" so a
     # Pi with a misset clock can't backdate events.
-    received_at = datetime.now(timezone.utc).isoformat()
-    device_ts = str(body.get("timestamp", "") or received_at)
+    received_at = datetime.now(timezone.utc)
+    received_at_iso = received_at.isoformat()
+    device_ts = str(body.get("timestamp", "") or received_at_iso)
+    device_id = device["device_id"]
+    label = device.get("label") or device_id
 
     # Update last_seen but DON'T overwrite real heartbeat telemetry —
-    # a press doesn't carry a uptime/temperature payload.
+    # a press doesn't carry an uptime/temperature payload.
     db_conn = auth_module.get_db(AUTH_DB_PATH)
     try:
-        auth_module.touch_device(db_conn, device["device_id"])
+        auth_module.touch_device(db_conn, device_id)
     finally:
         db_conn.close()
 
-    payload: dict[str, Any] = {
-        "type": "doorbell_press",
-        "device_id": device["device_id"],
-        "label": device.get("label") or device["device_id"],
-        "timestamp": received_at,
-        "device_timestamp": device_ts,
-    }
+    cfg = config_store.load_cached()
+    cfg_redis = (cfg.get("redis") or {})
+    redis_host = cfg_redis.get("host", "redis")
+    redis_port = int(cfg_redis.get("port", 6379))
+    redis_password = os.environ.get("REDIS_PASSWORD", "") or None
 
-    # HMAC-sign so the notifier can reject spoofed publishes from anything
-    # else on the internal Redis bus.
-    hmac_key = load_key_from_env()
-    if hmac_key is not None:
-        payload = sign_event(payload, hmac_key)
-
-    cfg_redis = _redis_cfg(request)
+    # Open a single Redis connection used for the snapshot RPC and the
+    # final publish, so we don't pay a connect twice in the hot path.
     client = aioredis.Redis(
-        host=cfg_redis["host"],
-        port=cfg_redis["port"],
-        password=os.environ.get("REDIS_PASSWORD", "") or None,
+        host=redis_host,
+        port=redis_port,
+        password=redis_password,
         decode_responses=True,
     )
     try:
+        snapshot_path = await _grab_snapshot(client, device_id)
+
+        # The doorbell device_id is convention-matched to a camera name
+        # in scarguard.yml — a doorbell is its own camera.  Fall back to
+        # the global notifications config when no per-camera rules are
+        # set, mirroring the detector's behaviour.
+        actions_triggered = _resolve_actions(cfg, device_id)
+
+        event_id, feedback_token = db.insert_doorbell_event(
+            camera_name=device_id,
+            snapshot_path=snapshot_path,
+            actions_triggered=actions_triggered,
+            timestamp=received_at,
+        )
+
+        payload: dict[str, Any] = {
+            "type": "doorbell_press",
+            "event_id": event_id,
+            "device_id": device_id,
+            "label": label,
+            "camera_name": device_id,
+            "class_name": "doorbell_press",
+            "confidence": 1.0,
+            "timestamp": received_at_iso,
+            "device_timestamp": device_ts,
+            "snapshot_path": snapshot_path,
+            "feedback_token": feedback_token,
+            "actions_triggered": actions_triggered,
+        }
+
+        # HMAC-sign so the notifier can reject spoofed publishes from
+        # anything else on the internal Redis bus.
+        hmac_key = load_key_from_env()
+        if hmac_key is not None:
+            payload = sign_event(payload, hmac_key)
+
         await client.publish(DOORBELL_CHANNEL, json.dumps(payload, default=str))
     finally:
         await client.aclose()
 
-    logger.info("Doorbell press from %s", device["device_id"])
-    return JSONResponse({"ok": True}, status_code=202)
+    logger.info(
+        "Doorbell press: device=%s event_id=%d snapshot=%s actions=%s",
+        device_id, event_id, snapshot_path, actions_triggered,
+    )
+    return JSONResponse({
+        "ok": True,
+        "event_id": event_id,
+        "snapshot_path": snapshot_path,
+    }, status_code=202)
 
 
-def _redis_cfg(_request: Request) -> dict[str, Any]:
-    """Read host/port from the cached YAML config; defaults match docker-compose."""
-    from config_store import load_cached
-    cfg = (load_cached().get("redis") or {})
-    return {
-        "host": cfg.get("host", "redis"),
-        "port": int(cfg.get("port", 6379)),
-    }
+async def _grab_snapshot(
+    client: aioredis.Redis,
+    camera_name: str,
+) -> str | None:
+    """Request a single frame from the detector via Redis RPC.
+
+    Returns the absolute snapshot path on success, ``None`` on timeout
+    or detector error.  We deliberately never raise from here — a
+    missing snapshot is logged but does not fail the press as a whole.
+    """
+    request_id = uuid.uuid4().hex
+    result_channel = f"openring:snapshot:result:{request_id}"
+    pubsub = client.pubsub()
+    try:
+        await pubsub.subscribe(result_channel)
+        await client.publish(
+            SNAPSHOT_REQUEST_CHANNEL,
+            json.dumps({"camera_name": camera_name, "request_id": request_id}),
+        )
+        deadline = SNAPSHOT_TIMEOUT_SECONDS
+        elapsed = 0.0
+        while elapsed < deadline:
+            msg = await pubsub.get_message(
+                ignore_subscribe_messages=True, timeout=1.0,
+            )
+            if msg and msg.get("type") == "message":
+                try:
+                    result = json.loads(msg["data"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if result.get("ok"):
+                    path = result.get("snapshot_path")
+                    return str(path) if path else None
+                logger.warning(
+                    "Snapshot grab failed for %s: %s",
+                    camera_name, result.get("error", "unknown"),
+                )
+                return None
+            elapsed += 1.0
+            await asyncio.sleep(0)
+        logger.warning(
+            "Snapshot grab timed out for %s after %.1fs",
+            camera_name, deadline,
+        )
+        return None
+    except Exception:
+        logger.exception("Snapshot grab failed for %s", camera_name)
+        return None
+    finally:
+        try:
+            await pubsub.unsubscribe(result_channel)
+            await pubsub.aclose()
+        except Exception:
+            pass
+
+
+def _resolve_actions(cfg: dict, device_id: str) -> list[str] | None:
+    """Apply the camera-side notification_rules for ``doorbell_press``.
+
+    Semantics mirror ``services/detector/src/main.py:_match_notification_rules``:
+      * camera not configured → ``[]`` (notify all enabled channels)
+      * camera has rules but none match → ``None`` (suppress)
+      * matching rule → list of channel names
+    """
+    cameras = cfg.get("cameras") or []
+    cam_cfg: dict | None = None
+    for c in cameras:
+        if isinstance(c, dict) and c.get("name") == device_id:
+            cam_cfg = c
+            break
+    if cam_cfg is None:
+        return []
+    rules = cam_cfg.get("notification_rules") or []
+    if not rules:
+        return []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        rule_class = rule.get("class_name", "*")
+        if rule_class == "*" or rule_class == "doorbell_press":
+            return list(rule.get("channels", []))
+    return None
+
+
