@@ -31,23 +31,27 @@ jobs:
             services/doorbell-firmware/src \
             shared
 
-  # ── Shellcheck (Pi-side installer) ─────────────────────────────────────
+  # ── Shellcheck (installers) ────────────────────────────────────────────
   shellcheck:
-    name: Shellcheck (pi-setup.sh)
+    name: Shellcheck (setup.sh + pi-setup.sh)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-      - name: shellcheck
+      - name: shellcheck — pi-setup.sh
         run: shellcheck services/doorbell-firmware/pi-setup.sh
+      - name: shellcheck — setup.sh
+        run: shellcheck setup.sh
       - name: bash -n syntax check
-        run: bash -n services/doorbell-firmware/pi-setup.sh
-      - name: --help works
+        run: |
+          bash -n setup.sh
+          bash -n services/doorbell-firmware/pi-setup.sh
+      - name: pi-setup.sh --help
         run: bash services/doorbell-firmware/pi-setup.sh --help
-      - name: --dry-run with valid args
+      - name: pi-setup.sh --dry-run
         run: bash services/doorbell-firmware/pi-setup.sh --dry-run --host-url https://openring.test --device-id front-door
-      - name: rejects bad device-id
+      - name: pi-setup.sh rejects bad device-id
         run: |
           set +e
           bash services/doorbell-firmware/pi-setup.sh --dry-run --host-url https://h --device-id "Bad ID"
@@ -57,6 +61,12 @@ jobs:
             echo "expected nonzero exit on bad device-id, got 0"
             exit 1
           fi
+      - name: setup.sh --help
+        run: bash setup.sh --help
+      - name: setup.sh --dry-run
+        # Docker is preinstalled on the GitHub runner, so the prerequisite
+        # check passes without the rest of the script touching anything.
+        run: bash setup.sh --dry-run
 
   # ── Type check ──────────────────────────────────────────────────────────
   # Detector is excluded — it imports torch / opencv / ultralytics which

@@ -51,7 +51,37 @@ The reference build uses a Pi Zero 2 W. Anything Linux-capable with a camera and
 
 ## Quick start
 
-> Not implemented yet. v0.1 will ship a `setup.sh` for the host and a `pi-setup.sh` for the doorbell. Track the milestone in [ROADMAP.md](ROADMAP.md#v01--mvp-doorbell-event-flow).
+```bash
+# 1. Clone the repo on whatever Linux/macOS box will host the brain
+git clone https://github.com/Tmana/openring.git
+cd openring
+
+# 2. Generate secrets, seed the config volume, build the images.
+#    Idempotent — safe to re-run.
+./setup.sh
+
+# 3. Bring the stack up
+docker compose up -d
+
+# 4. Grab the one-time bootstrap token from the web service logs:
+docker compose logs -f web | grep -A2 'First-run setup'
+
+# 5. Browse to the URL it prints (typically http://localhost/setup?token=...)
+#    and create the first admin user.
+
+# 6. From the web UI: Admin → Doorbells → "Pair new device" (5-min window).
+
+# 7. On the Pi, after flashing Pi OS Lite 64-bit:
+sudo ./services/doorbell-firmware/pi-setup.sh --host-url http://<your-host>
+
+# 8. Paste the YAML camera snippet pi-setup.sh prints into openring.yml
+#    on the host, then:
+docker compose restart detector
+
+# 9. Press the button.
+```
+
+`setup.sh --help` and `pi-setup.sh --help` document every flag. Both scripts have a `--dry-run` mode if you want to preview what they'd do before letting them touch anything.
 
 ## Local-only, in practice
 
