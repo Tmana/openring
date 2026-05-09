@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import clips_db
 import config_store
 import db
 import redis.asyncio as aioredis
@@ -51,6 +52,30 @@ def _apply_display_timestamp(events: list[dict]) -> list[dict]:
     return events
 
 
+def _attach_clips(events: list[dict]) -> list[dict]:
+    """Annotate each event with a ``clip`` dict from the clipper sidecar.
+
+    Events with no feedback_token, or whose clip is missing (clipper
+    sidecar disabled, never ran, or pruned the clip), get
+    ``clip: None``.  The template treats that as "no clip available".
+    Successful clips get a usable URL at ``/clips/<token>.mp4``.
+    """
+    tokens = [e["feedback_token"] for e in events if e.get("feedback_token")]
+    rows = clips_db.get_clips_for_tokens(tokens) if tokens else {}
+    for e in events:
+        token = e.get("feedback_token")
+        clip = rows.get(token) if token else None
+        if clip and not clip.get("error") and clip.get("clip_path"):
+            # Build a public URL from the filename portion of clip_path so the
+            # /clips static mount serves it.  Don't trust clip_path's full
+            # path — render only the basename to defeat path-traversal
+            # surprises.
+            filename = os.path.basename(clip["clip_path"])
+            clip = {**clip, "url": f"/clips/{filename}"}
+        e["clip"] = clip
+    return events
+
+
 def _get_camera_names() -> list[str]:
     """Return distinct camera names from the DB for the filter dropdown."""
     try:
@@ -82,7 +107,7 @@ async def events_page(
     fb = feedback or None
     rows = db.get_events(limit=PAGE_SIZE, offset=offset, camera=cam, class_name=cls, date_from=dfrom, date_to=dto, feedback=fb)
     total = db.count_events(camera=cam, class_name=cls, date_from=dfrom, date_to=dto, feedback=fb)
-    events = _apply_display_timestamp([dict(r) for r in rows])
+    events = _attach_clips(_apply_display_timestamp([dict(r) for r in rows]))
     return templates.TemplateResponse(
         request,
         "events.html",
@@ -118,7 +143,7 @@ async def event_rows(
         camera=camera or None, class_name=class_name or None,
         date_from=date_from or None, date_to=date_to or None,
     )
-    events = _apply_display_timestamp([dict(r) for r in rows])
+    events = _attach_clips(_apply_display_timestamp([dict(r) for r in rows]))
     return templates.TemplateResponse(
         request,
         "partials/event_rows.html",
@@ -149,7 +174,7 @@ async def submit_feedback(
         row = db.get_event(event_id)
         if row is None:
             return HTMLResponse("<tr><td colspan='7'>Event not found</td></tr>")
-        events = _apply_display_timestamp([dict(row)])
+        events = _attach_clips(_apply_display_timestamp([dict(row)]))
         return templates.TemplateResponse(
             request,
             "partials/event_rows.html",
@@ -160,7 +185,7 @@ async def submit_feedback(
     if row is None:
         return HTMLResponse("<tr><td colspan='7'>Event not found</td></tr>")
     event = dict(row)
-    events = _apply_display_timestamp([event])
+    events = _attach_clips(_apply_display_timestamp([event]))
     return templates.TemplateResponse(
         request,
         "partials/event_rows.html",

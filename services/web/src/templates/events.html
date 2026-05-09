@@ -94,6 +94,7 @@ document.addEventListener('click', function(e) {
   var className = link.dataset.className || '';
   var confidence = link.dataset.confidence ? parseFloat(link.dataset.confidence) : null;
   var cameraName = link.dataset.cameraName || '';
+  var clipUrl = link.dataset.clipUrl || '';
   var src = link.querySelector('img').src;
 
   var overlay = document.createElement('div');
@@ -154,6 +155,48 @@ document.addEventListener('click', function(e) {
       imgWrap.appendChild(box);
     }
   };
+
+  // v0.2: clip toggle.  When the event has a clip, render a "Watch clip"
+  // button in the header that swaps the snapshot+bbox out for a <video>
+  // element.  Clicking it again returns to the snapshot.  The bbox and
+  // the toggled state aren't persisted across re-opens of the overlay.
+  if (clipUrl) {
+    var clipBtn = document.createElement('button');
+    clipBtn.type = 'button';
+    clipBtn.className = 'snapshot-overlay__clip-toggle';
+    clipBtn.textContent = '▶ Watch clip';
+    clipBtn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      var showingVideo = imgWrap.dataset.showingVideo === '1';
+      if (showingVideo) {
+        // Tear down the video, restore the still image.
+        var existingVideo = imgWrap.querySelector('video');
+        if (existingVideo) {
+          existingVideo.pause();
+          existingVideo.remove();
+        }
+        img.style.display = '';
+        var box = imgWrap.querySelector('.snapshot-overlay__bbox');
+        if (box) box.style.display = '';
+        imgWrap.dataset.showingVideo = '';
+        clipBtn.textContent = '▶ Watch clip';
+      } else {
+        img.style.display = 'none';
+        var existingBox = imgWrap.querySelector('.snapshot-overlay__bbox');
+        if (existingBox) existingBox.style.display = 'none';
+        var video = document.createElement('video');
+        video.src = clipUrl;
+        video.controls = true;
+        video.autoplay = true;
+        video.preload = 'metadata';
+        video.className = 'snapshot-overlay__video';
+        imgWrap.appendChild(video);
+        imgWrap.dataset.showingVideo = '1';
+        clipBtn.textContent = '⏸ Show snapshot';
+      }
+    });
+    header.appendChild(clipBtn);
+  }
 
   if (eventId) {
     var fbPanel = document.createElement('div');
