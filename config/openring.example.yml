@@ -1,0 +1,84 @@
+# OpenRing example config.
+#
+# Copy to /var/lib/openring-config/openring.yml (the named Docker volume)
+# during host setup. setup.sh does this for you.
+#
+# Secrets in this file are kept in plaintext on the host's data
+# directory; for production deployments, OpenRing v0.2+ will support
+# the same envelope-encrypted secrets pattern ScarGuard uses.
+
+system:
+  log_level: info
+  timezone: "America/Los_Angeles"
+  retention_days: 30          # snapshots, clips, events older than this are pruned (labeled events kept)
+  stats_interval: 5            # seconds between system-stats samples
+  base_url: "https://openring.local"   # external URL used in notification deep-links
+
+# Doorbell devices the host trusts. Populated by the pairing flow
+# (POST /api/doorbell/register from a fresh Pi during the 5-minute
+# pairing window opened from the web UI). You usually won't edit this
+# by hand.
+doorbells:
+  - device_id: front-door
+    label: "Front door"
+    # token is hashed and stored in auth.db, not here
+    heartbeat_timeout_seconds: 90
+
+# Camera streams (RTSP from each doorbell, plus optionally any
+# standalone IP cameras you also want OpenRing to watch).
+cameras:
+  - name: front-door
+    rtsp_url: "rtsp://openring:CHANGE_ME@openring-doorbell.local:8554/door"
+    enabled: true
+    resolution: 720
+    # Exclusion zones use NORMALIZED coordinates (0.0-1.0).
+    # Exclude the public sidewalk / a neighbor's window / the
+    # mailbox if that makes sense for your install.
+    exclusion_zones:
+      - x: 0.00
+        y: 0.85
+        w: 1.00
+        h: 0.15
+        label: "sidewalk"
+    # Per-camera rules for which channels each detected class fires.
+    # First-match-wins; "*" is the catch-all.
+    notification_rules:
+      - class_name: person
+        channels: [phone-ntfy, owner-email]
+      - class_name: "*"
+        channels: [phone-ntfy]
+
+detection:
+  model_path: /models/yolov8n.pt
+  confidence_threshold: 0.40
+  target_classes:
+    - person
+  cooldown_seconds: 30
+  frame_skip: 2
+
+notifications:
+  channels:
+    - name: phone-ntfy
+      type: ntfy
+      server: "https://ntfy.sh"
+      topic: "openring-CHANGE_ME"      # use a long random topic; this URL is unauthenticated
+      priority: 4
+      include_snapshot: true
+      enabled: true
+    - name: owner-email
+      type: email
+      smtp_host: "smtp.example.com"
+      smtp_port: 587
+      smtp_user: "you@example.com"
+      smtp_pass: "CHANGE_ME"
+      from_addr: "openring@example.com"
+      to_addrs: ["you@example.com"]
+      enabled: false
+
+tls:
+  mode: "off"                       # off (LAN-only) | auto (Let's Encrypt) | manual
+  domain: ""
+
+redis:
+  host: redis
+  port: 6379

@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Local secrets / runtime data — NEVER commit
+.env
+.env.*
+!.env.example
+config/openring.yml
+data/
+snapshots/
+clips/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Build artifacts
+dist/
+build/
+*.tar.gz
+
+# Pi cross-build outputs
+services/doorbell-firmware/build/
+*.deb

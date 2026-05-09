@@ -1,0 +1,2 @@
+v0.0 placeholder. Detector ports over from ScarGuard in ROADMAP.md issue #2.
+target_classes default flips from ScarGuard's bird/heron/duck list to ["person"].

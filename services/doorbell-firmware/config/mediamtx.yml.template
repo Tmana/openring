@@ -1,0 +1,39 @@
+# MediaMTX config rendered by pi-setup.sh.  Variables in ${...} are
+# substituted with values from /etc/openring/secrets.env.
+
+logLevel: info
+logDestinations: [stdout]
+readTimeout: 10s
+writeTimeout: 10s
+
+api: no                # no MediaMTX HTTP API — we don't expose it
+metrics: no
+hls: no                # we'll serve live view via the host stack
+webrtc: no             # WebRTC is a v0.4 feature
+
+rtsp: yes
+rtspAddress: :8554
+rtspAuthMethods: [basic]
+
+# Single path: /door, fed by libcamera-vid → ffmpeg → loopback RTSP
+paths:
+  door:
+    runOnInit: |
+      libcamera-vid -t 0 --inline -o - \
+        --width 1280 --height 720 --framerate 15 \
+        --codec h264 --profile high --intra 30 --bitrate 4000000 \
+        --denoise cdn_off \
+        | ffmpeg -loglevel warning -f h264 -i - \
+            -c:v copy -an \
+            -f rtsp rtsp://localhost:8554/door
+    runOnInitRestart: yes
+
+# Authenticate every reader / publisher on /door against this single user.
+authInternalUsers:
+  - user: openring
+    pass: ${RTSP_PASSWORD}
+    permissions:
+      - action: publish
+        path: door
+      - action: read
+        path: door

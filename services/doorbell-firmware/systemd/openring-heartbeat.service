@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenRing heartbeat
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/openring/secrets.env
+WorkingDirectory=/opt/openring
+ExecStart=/usr/bin/python3 /opt/openring/src/heartbeat.py
+Restart=always
+RestartSec=3
+User=openring
+Group=openring
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

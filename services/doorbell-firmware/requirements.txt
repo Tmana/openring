@@ -1,0 +1,5 @@
+# Pi-side runtime deps. Pinned conservatively — apt-get on Pi OS
+# Bookworm provides recent enough versions, but if you install via
+# pip in a venv these are the tested floor.
+gpiozero>=2.0
+requests>=2.31

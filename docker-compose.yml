@@ -1,0 +1,144 @@
+name: openring
+
+# OpenRing host stack.
+#
+# Image names assume you build locally for now (`docker compose build`).
+# Once we publish to GHCR (post-v0.1), set GHCR_OWNER in a .env file.
+#
+# This file is a v0.0 skeleton — services are listed but Dockerfiles
+# don't exist yet. See ROADMAP.md issue #2 for the porting work.
+
+services:
+
+  # ── Redis ────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    user: "999:999"
+    restart: unless-stopped
+    command: >-
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
+        exec redis-server --requirepass "$$REDIS_PASSWORD" --maxmemory 200mb --maxmemory-policy allkeys-lru;
+      else
+        exec redis-server --maxmemory 200mb --maxmemory-policy allkeys-lru;
+      fi'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      OPENRING_HMAC_KEY: ${OPENRING_HMAC_KEY:-}
+    healthcheck:
+      test: >-
+        sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
+          redis-cli -a "$$REDIS_PASSWORD" --no-auth-warning ping;
+        else
+          redis-cli ping;
+        fi'
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    volumes:
+      - openring-redis:/data
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  # ── Caddy reverse proxy ──────────────────────────────────────────────
+  # Stub — Dockerfile lands with issue #2.
+  caddy:
+    build:
+      context: .
+      dockerfile: services/caddy/Dockerfile
+    image: openring-caddy:${IMAGE_TAG:-dev}
+    profiles: ["full"]   # exclude until we've actually built it
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - openring-caddy:/data
+      - openring-config:/config:ro
+    depends_on:
+      web:
+        condition: service_started
+    restart: unless-stopped
+    mem_limit: 128m
+
+  # ── Detector ─────────────────────────────────────────────────────────
+  detector:
+    build:
+      context: .
+      dockerfile: services/detector/Dockerfile
+    image: openring-detector:${IMAGE_TAG:-dev}
+    profiles: ["full"]
+    environment:
+      CONFIG_PATH: /config/openring.yml
+      SNAPSHOT_DIR: /data/snapshots
+      DB_PATH: /data/openring.db
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      OPENRING_HMAC_KEY: ${OPENRING_HMAC_KEY:-}
+    volumes:
+      - openring-config:/config:ro
+      - openring-models:/models:ro
+      - openring-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 3g
+
+  # ── Web UI ───────────────────────────────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: services/web/Dockerfile
+    image: openring-web:${IMAGE_TAG:-dev}
+    profiles: ["full"]
+    environment:
+      CONFIG_PATH: /config/openring.yml
+      SNAPSHOT_DIR: /data/snapshots
+      CLIPS_DIR: /data/clips
+      DB_PATH: /data/openring.db
+      AUTH_DB_PATH: /data/auth.db
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      OPENRING_HMAC_KEY: ${OPENRING_HMAC_KEY:-}
+    volumes:
+      - openring-config:/config
+      - openring-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 512m
+
+  # ── Notifier ─────────────────────────────────────────────────────────
+  notifier:
+    build:
+      context: .
+      dockerfile: services/notifier/Dockerfile
+    image: openring-notifier:${IMAGE_TAG:-dev}
+    profiles: ["full"]
+    environment:
+      CONFIG_PATH: /config/openring.yml
+      DB_PATH: /data/openring.db
+      SNAPSHOT_DIR: /data/snapshots
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      OPENRING_HMAC_KEY: ${OPENRING_HMAC_KEY:-}
+    volumes:
+      - openring-config:/config:ro
+      - openring-data:/data:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 256m
+
+volumes:
+  openring-config:
+    name: openring-config
+  openring-data:
+    name: openring-data
+  openring-models:
+    name: openring-models
+  openring-redis:
+    name: openring-redis
+  openring-caddy:
+    name: openring-caddy

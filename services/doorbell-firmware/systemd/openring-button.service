@@ -1,0 +1,23 @@
+[Unit]
+Description=OpenRing doorbell button + heartbeat
+After=network-online.target openring-mediamtx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/openring/secrets.env
+WorkingDirectory=/opt/openring
+ExecStart=/usr/bin/python3 /opt/openring/src/button.py
+Restart=always
+RestartSec=3
+User=openring
+Group=openring
+SupplementaryGroups=gpio
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/openring /tmp
+
+[Install]
+WantedBy=multi-user.target

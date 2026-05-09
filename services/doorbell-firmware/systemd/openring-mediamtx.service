@@ -1,0 +1,22 @@
+[Unit]
+Description=OpenRing MediaMTX RTSP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/openring/secrets.env
+ExecStart=/usr/local/bin/mediamtx /etc/openring/mediamtx.yml
+Restart=always
+RestartSec=5
+User=openring
+Group=openring
+# Hardening — MediaMTX itself doesn't need most syscalls
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/openring
+
+[Install]
+WantedBy=multi-user.target
