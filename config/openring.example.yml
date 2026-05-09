@@ -31,21 +31,45 @@ cameras:
     rtsp_url: "rtsp://openring:CHANGE_ME@openring-doorbell.local:8554/door"
     enabled: true
     resolution: 720
-    # Exclusion zones use NORMALIZED coordinates (0.0-1.0).
-    # Exclude the public sidewalk / a neighbor's window / the
-    # mailbox if that makes sense for your install.
+
+    # Exclusion zones suppress detections whose bbox center falls inside
+    # the zone.  Coordinates are NORMALIZED to the frame: x=0,y=0 is the
+    # top-left, x=1,y=1 is the bottom-right.  w and h are also fractions
+    # of the frame, NOT pixel counts.
+    #
+    # The web UI's Cameras → Exclusion zones canvas is the friendliest
+    # way to draw these — it shows your live frame with overlay rectangles
+    # you can click-and-drag.  The values below are example starting
+    # points for a typical American suburban porch.
     exclusion_zones:
-      - x: 0.00
-        y: 0.85
+      - x: 0.00            # bottom strip — public sidewalk in front of the house
+        y: 0.85            #   suppresses pedestrians passing by who never approach
         w: 1.00
         h: 0.15
         label: "sidewalk"
+      # Uncomment + tune for your install:
+      # - x: 0.78            # right edge — neighbor's window across the property line
+      #   y: 0.10
+      #   w: 0.22
+      #   h: 0.55
+      #   label: "neighbor window"
+      # - x: 0.40            # the inflatable Halloween skeleton on the porch
+      #   y: 0.55            #   that YOLO keeps re-detecting every cooldown_seconds
+      #   w: 0.20
+      #   h: 0.30
+      #   label: "halloween decoy"
+
     # Per-camera rules for which channels each detected class fires.
-    # First-match-wins; "*" is the catch-all.
+    # First-match-wins; "*" is the catch-all.  Empty channels=[] means
+    # "log the event but suppress notifications" — useful for classes
+    # you want in the events page but not on your phone (delivery
+    # drivers tagged later, dogs walking by, etc.).
     notification_rules:
-      - class_name: person
+      - class_name: doorbell_press        # someone actually pressed the button
         channels: [phone-ntfy, owner-email]
-      - class_name: "*"
+      - class_name: person                # YOLO detected a person on the porch
+        channels: [phone-ntfy]
+      - class_name: "*"                   # everything else (dogs, cats, raccoons)
         channels: [phone-ntfy]
 
 detection:
