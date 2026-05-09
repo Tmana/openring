@@ -139,6 +139,41 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
 
+  # ── Clipper (sidecar) ───────────────────────────────────────────────
+  # v0.2: per-camera ffmpeg segmenter + on-event MP4 writer.  Optional —
+  # opt-in via clipper.enabled in openring.yml.  Mounts /data:rw so it
+  # can write clips and the clips-table row in openring.db.
+  clipper:
+    build:
+      context: .
+      dockerfile: services/clipper/Dockerfile
+    image: openring-clipper:${IMAGE_TAG:-dev}
+    environment:
+      CONFIG_PATH: /config/openring.yml
+      DB_PATH: /data/openring.db
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      DETECTION_HMAC_KEY: ${DETECTION_HMAC_KEY:-}
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/healthy -mmin -1 | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - openring-config:/config:ro
+      - openring-data:/data
+      - openring-clipper:/var/lib/openring  # ring buffer (segments)
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 200
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
+
   # ── Notifier ─────────────────────────────────────────────────────────
   notifier:
     build:
@@ -191,3 +226,5 @@ volumes:
     name: openring-caddy
   openring-notifier:
     name: openring-notifier
+  openring-clipper:
+    name: openring-clipper

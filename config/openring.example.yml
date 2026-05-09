@@ -99,6 +99,26 @@ notifications:
       to_addrs: ["you@example.com"]
       enabled: false
 
+# v0.2: video clips.  Optional sidecar service writes 5s pre-roll + 5s
+# post-roll MP4 clips for every qualifying detection / doorbell press.
+# Safest defaults:
+#   * enabled: false        — opt-in.  When on, the segmenter spawns
+#                              one ffmpeg subprocess per enabled camera,
+#                              ~few % CPU and ~0.5 GB disk per camera
+#                              at 30 segments × 1s × typical H.264 bitrate.
+#   * trigger_classes:      — narrow this to the events you want clips
+#                              for; the default already excludes
+#                              noise-class detections.
+clipper:
+  enabled: false
+  pre_roll_seconds: 5.0
+  post_roll_seconds: 5.0
+  segment_seconds: 1                # MPEG-TS segment granularity
+  segments_per_camera: 30           # ring depth (~30s of history)
+  trigger_classes: [person, doorbell_press]
+  min_confidence: 0.40
+  max_concurrent_clips: 4
+
 tls:
   mode: "off"                       # off (LAN-only) | auto (Let's Encrypt) | manual
   domain: ""
