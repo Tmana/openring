@@ -29,6 +29,7 @@ CONFIG_PATH = os.environ.get("CONFIG_PATH", "/config/openring.yml")
 CHANNEL = "openring:detections"
 HEALTH_CHANNEL = "openring:health"
 DOORBELL_CHANNEL = "openring:doorbell"
+DEVICE_CHANNEL = "openring:device"
 
 # How long to wait before retrying a failed Redis connection (seconds).
 _REDIS_RECONNECT_DELAY = 5
@@ -236,10 +237,10 @@ def subscribe_loop(
             redis_password = os.environ.get("REDIS_PASSWORD", "") or None
             client = redis_lib.Redis(host=host, port=port, password=redis_password, decode_responses=True)
             pubsub = client.pubsub()
-            pubsub.subscribe(CHANNEL, HEALTH_CHANNEL, DOORBELL_CHANNEL)
+            pubsub.subscribe(CHANNEL, HEALTH_CHANNEL, DOORBELL_CHANNEL, DEVICE_CHANNEL)
             logger.info(
-                "Subscribed to Redis channels: %s, %s, %s",
-                CHANNEL, HEALTH_CHANNEL, DOORBELL_CHANNEL,
+                "Subscribed to Redis channels: %s, %s, %s, %s",
+                CHANNEL, HEALTH_CHANNEL, DOORBELL_CHANNEL, DEVICE_CHANNEL,
             )
             delay = _REDIS_RECONNECT_DELAY  # reset backoff on successful connect
             pathlib.Path("/tmp/healthy").touch(exist_ok=True)
@@ -257,10 +258,11 @@ def subscribe_loop(
                     logger.warning("Received malformed message: %s", message["data"])
                     continue
 
-                # Signature verification (detection + doorbell channels —
-                # health alerts come from the detector's health publisher,
-                # not the detection publisher, and aren't signed today).
-                signed_channels = (CHANNEL, DOORBELL_CHANNEL)
+                # Signature verification (detection + doorbell + device
+                # channels — health alerts come from the detector's health
+                # publisher, not the detection publisher, and aren't
+                # signed today).
+                signed_channels = (CHANNEL, DOORBELL_CHANNEL, DEVICE_CHANNEL)
                 if message["channel"] in signed_channels and hmac_key is not None:
                     if not verify_event(event, hmac_key):
                         if not invalid_warned:
@@ -329,6 +331,47 @@ def subscribe_loop(
                 base_url = _base_url_ref.get() if _base_url_ref else ""
                 if base_url:
                     event["_base_url"] = base_url
+
+                if message["channel"] == DEVICE_CHANNEL:
+                    # v0.2 #16: device offline / recovered watchdog events.
+                    # Translate into a dispatchable event shape so the
+                    # existing notifier pipeline picks them up like any
+                    # other detection.
+                    alert_type = event.get("type")
+                    if alert_type == "device_offline":
+                        translated = {
+                            "timestamp": event.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                            "class_name": "device_offline",
+                            "confidence": 1.0,
+                            "camera_name": event.get("device_id", "?"),
+                            "snapshot_path": None,
+                            "label": event.get("label"),
+                            "offline_seconds": event.get("offline_seconds"),
+                        }
+                        logger.warning(
+                            "Doorbell %s offline (last seen %s)",
+                            event.get("device_id"), event.get("last_seen_at"),
+                        )
+                        dispatch(translated, notifiers, notifiers_lock, queue)
+                    elif alert_type == "device_recovered":
+                        translated = {
+                            "timestamp": event.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                            "class_name": "device_recovered",
+                            "confidence": 1.0,
+                            "camera_name": event.get("device_id", "?"),
+                            "snapshot_path": None,
+                            "label": event.get("label"),
+                        }
+                        logger.info(
+                            "Doorbell %s recovered", event.get("device_id"),
+                        )
+                        dispatch(translated, notifiers, notifiers_lock, queue)
+                    else:
+                        logger.warning(
+                            "Unknown openring:device event type %r — dropping",
+                            alert_type,
+                        )
+                    continue
 
                 if message["channel"] == DOORBELL_CHANNEL:
                     logger.info(
