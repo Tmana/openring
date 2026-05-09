@@ -195,53 +195,105 @@ class TestPress:
             json={"device_id": "front-door", "label": "Front door"},
         ).json()["device_token"]
 
+    def _fake_redis(self) -> MagicMock:
+        """Mock aioredis.Redis with publish + aclose stubs.
+
+        ``_grab_snapshot`` is patched separately so we don't need to
+        emulate the pubsub round-trip here.
+        """
+        fake = MagicMock()
+        fake.publish = AsyncMock(return_value=1)
+        fake.aclose = AsyncMock()
+        return fake
+
+    @pytest.fixture(autouse=True)
+    def _stub_event_insert(self, monkeypatch):
+        """Stub the SQLite write — the detection_events table is owned by
+        the detector and isn't initialised in the web test environment.
+        Each call returns an incrementing event id and a fresh token."""
+        counter = {"n": 0}
+
+        def fake_insert(camera_name, snapshot_path, actions_triggered,
+                       feedback_token=None, timestamp=None):
+            counter["n"] += 1
+            import uuid as _u
+            return counter["n"], feedback_token or _u.uuid4().hex
+
+        monkeypatch.setattr("routes.doorbell.db.insert_doorbell_event", fake_insert)
+
     def test_no_bearer_rejected(self, client, fresh_app_state) -> None:
         resp = client.post("/api/doorbell/press", json={})
         assert resp.status_code == 401
 
-    def test_publishes_to_redis(self, client, fresh_app_state) -> None:
+    def test_publishes_with_snapshot(self, client, fresh_app_state) -> None:
         token = self._register(client, fresh_app_state)
-        # Mock the aioredis client so the test doesn't need a real Redis.
-        fake_redis = MagicMock()
-        fake_redis.publish = AsyncMock(return_value=1)
-        fake_redis.aclose = AsyncMock()
-        with patch(
-            "routes.doorbell.aioredis.Redis",
-            return_value=fake_redis,
-        ):
+        fake_redis = self._fake_redis()
+        with patch("routes.doorbell.aioredis.Redis", return_value=fake_redis), \
+             patch(
+                 "routes.doorbell._grab_snapshot",
+                 new=AsyncMock(return_value="/data/snapshots/front-door_press.jpg"),
+             ):
             resp = client.post(
                 "/api/doorbell/press",
                 json={"timestamp": "2026-05-09T18:42:11+00:00", "device_id": "front-door"},
                 headers={"Authorization": f"Bearer {token}"},
             )
         assert resp.status_code == 202
-        # One publish to openring:doorbell with a JSON payload
+        assert resp.json()["snapshot_path"] == "/data/snapshots/front-door_press.jpg"
+        assert isinstance(resp.json()["event_id"], int)
+        # Exactly one publish to openring:doorbell
         assert fake_redis.publish.await_count == 1
         channel, payload_json = fake_redis.publish.await_args.args
         assert channel == "openring:doorbell"
         payload = json.loads(payload_json)
         assert payload["type"] == "doorbell_press"
         assert payload["device_id"] == "front-door"
+        assert payload["camera_name"] == "front-door"
+        assert payload["class_name"] == "doorbell_press"
+        assert payload["confidence"] == 1.0
+        assert payload["snapshot_path"] == "/data/snapshots/front-door_press.jpg"
         assert payload["device_timestamp"] == "2026-05-09T18:42:11+00:00"
-        # received_at is the host's clock, distinct from device_timestamp
         assert "timestamp" in payload
+        assert "feedback_token" in payload
+        assert payload["actions_triggered"] == []  # no rules in MOCK_CONFIG
+
+    def test_snapshot_failure_still_records_press(
+        self, client, fresh_app_state,
+    ) -> None:
+        token = self._register(client, fresh_app_state)
+        fake_redis = self._fake_redis()
+        with patch("routes.doorbell.aioredis.Redis", return_value=fake_redis), \
+             patch(
+                 "routes.doorbell._grab_snapshot",
+                 new=AsyncMock(return_value=None),
+             ):
+            resp = client.post(
+                "/api/doorbell/press",
+                json={"device_id": "front-door"},
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        # Press still completes — a doorbell ring without a still image is
+        # better signal than no event at all.
+        assert resp.status_code == 202
+        assert resp.json()["snapshot_path"] is None
+        payload = json.loads(fake_redis.publish.await_args.args[1])
+        assert payload["snapshot_path"] is None
 
     def test_press_does_not_overwrite_telemetry(
         self, client, fresh_app_state,
     ) -> None:
         token = self._register(client, fresh_app_state)
-        # Heartbeat first → telemetry stored
         client.post(
             "/api/doorbell/heartbeat",
             json={"version": "0.0.1", "uptime_seconds": 100},
             headers={"Authorization": f"Bearer {token}"},
         )
-        fake_redis = MagicMock()
-        fake_redis.publish = AsyncMock(return_value=1)
-        fake_redis.aclose = AsyncMock()
-        with patch(
-            "routes.doorbell.aioredis.Redis", return_value=fake_redis,
-        ):
+        fake_redis = self._fake_redis()
+        with patch("routes.doorbell.aioredis.Redis", return_value=fake_redis), \
+             patch(
+                 "routes.doorbell._grab_snapshot",
+                 new=AsyncMock(return_value=None),
+             ):
             client.post(
                 "/api/doorbell/press",
                 json={"timestamp": "x", "device_id": "front-door"},
@@ -393,3 +445,148 @@ class TestDeviceAuthHelpers:
                 auth_module.create_device_token(db, "front-door", "")
         finally:
             db.close()
+
+
+# ── _resolve_actions (notification routing for doorbell_press) ───────────
+
+
+class TestResolveActions:
+    """Cover the per-camera notification_rules lookup the press handler
+    runs against the cached YAML config.  The detector has the same
+    semantics for ``openring:detections`` events."""
+
+    def _resolve(self, cfg: dict, device_id: str) -> list[str] | None:
+        from routes.doorbell import _resolve_actions
+        return _resolve_actions(cfg, device_id)
+
+    def test_unknown_camera_notifies_all(self) -> None:
+        # No matching camera → empty list (notifier interprets as "all")
+        assert self._resolve({"cameras": []}, "front-door") == []
+
+    def test_camera_with_no_rules_notifies_all(self) -> None:
+        cfg = {"cameras": [{"name": "front-door"}]}
+        assert self._resolve(cfg, "front-door") == []
+
+    def test_explicit_rule_returns_channels(self) -> None:
+        cfg = {"cameras": [{
+            "name": "front-door",
+            "notification_rules": [
+                {"class_name": "doorbell_press", "channels": ["phone-ntfy"]},
+            ],
+        }]}
+        assert self._resolve(cfg, "front-door") == ["phone-ntfy"]
+
+    def test_wildcard_rule_matches(self) -> None:
+        cfg = {"cameras": [{
+            "name": "front-door",
+            "notification_rules": [
+                {"class_name": "*", "channels": ["everyone"]},
+            ],
+        }]}
+        assert self._resolve(cfg, "front-door") == ["everyone"]
+
+    def test_no_match_returns_none_to_suppress(self) -> None:
+        cfg = {"cameras": [{
+            "name": "front-door",
+            "notification_rules": [
+                {"class_name": "person", "channels": ["x"]},
+            ],
+        }]}
+        assert self._resolve(cfg, "front-door") is None
+
+
+# ── db.insert_doorbell_event ─────────────────────────────────────────────
+
+
+class TestInsertDoorbellEvent:
+    """Direct test of the SQL insert path against an isolated events DB."""
+
+    @pytest.fixture
+    def fresh_events_db(self, tmp_path, monkeypatch):
+        path = str(tmp_path / "openring-test.db")
+        monkeypatch.setenv("DB_PATH", path)
+        # Reload db module so DB_PATH picks up the new env var.
+        import importlib
+
+        import db as web_db
+        importlib.reload(web_db)
+        # Mirror the detector's CREATE TABLE for detection_events.
+        import sqlite3
+        conn = sqlite3.connect(path)
+        conn.executescript("""
+            CREATE TABLE detection_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                class_name TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                camera_name TEXT NOT NULL,
+                snapshot_path TEXT,
+                actions_triggered TEXT,
+                bbox TEXT,
+                frame_size TEXT,
+                feedback TEXT,
+                corrected_class TEXT,
+                feedback_token TEXT
+            );
+        """)
+        conn.commit()
+        conn.close()
+        yield web_db
+        # Subsequent tests get the conftest's standard DB_PATH back via
+        # monkeypatch teardown.
+
+    def test_inserts_with_all_fields(self, fresh_events_db) -> None:
+        event_id, token = fresh_events_db.insert_doorbell_event(
+            camera_name="front-door",
+            snapshot_path="/data/snapshots/x.jpg",
+            actions_triggered=["phone-ntfy"],
+        )
+        assert event_id > 0
+        assert token  # auto-generated uuid
+        # Read back
+        import sqlite3
+        conn = sqlite3.connect(os.environ["DB_PATH"])
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM detection_events WHERE id=?", (event_id,),
+        ).fetchone()
+        conn.close()
+        assert row["class_name"] == "doorbell_press"
+        assert row["confidence"] == 1.0
+        assert row["camera_name"] == "front-door"
+        assert row["snapshot_path"] == "/data/snapshots/x.jpg"
+        assert json.loads(row["actions_triggered"]) == ["phone-ntfy"]
+        assert row["feedback_token"] == token
+
+    def test_none_actions_stored_as_null(self, fresh_events_db) -> None:
+        # actions_triggered=None means "rules exist but no rule matched"
+        # — represented as SQL NULL so the notifier suppresses it.
+        event_id, _ = fresh_events_db.insert_doorbell_event(
+            camera_name="front-door",
+            snapshot_path=None,
+            actions_triggered=None,
+        )
+        import sqlite3
+        conn = sqlite3.connect(os.environ["DB_PATH"])
+        row = conn.execute(
+            "SELECT actions_triggered FROM detection_events WHERE id=?",
+            (event_id,),
+        ).fetchone()
+        conn.close()
+        assert row[0] is None
+
+    def test_empty_actions_stored_as_empty_json(self, fresh_events_db) -> None:
+        # actions_triggered=[] means "no rules configured" → notify all
+        event_id, _ = fresh_events_db.insert_doorbell_event(
+            camera_name="front-door",
+            snapshot_path=None,
+            actions_triggered=[],
+        )
+        import sqlite3
+        conn = sqlite3.connect(os.environ["DB_PATH"])
+        row = conn.execute(
+            "SELECT actions_triggered FROM detection_events WHERE id=?",
+            (event_id,),
+        ).fetchone()
+        conn.close()
+        assert row[0] == "[]"
