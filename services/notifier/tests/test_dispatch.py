@@ -4,7 +4,6 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from conftest import SAMPLE_EVENT
 
 
@@ -375,3 +374,34 @@ class TestDispatchFiltering:
         dispatch(event, [email, discord])
         email.send.assert_called_once()
         discord.send.assert_not_called()
+
+    def test_dispatch_routes_doorbell_press_event(self):
+        """A doorbell_press event from openring:doorbell is dispatched the
+        same way as a detection — class_name is just a label, the routing
+        decision lives in actions_triggered."""
+        from main import dispatch
+
+        doorbell_event = {
+            "type": "doorbell_press",
+            "class_name": "doorbell_press",
+            "confidence": 1.0,
+            "device_id": "front-door",
+            "camera_name": "front-door",
+            "label": "Front door",
+            "timestamp": "2026-05-09T18:42:11+00:00",
+            "snapshot_path": "/data/snapshots/front-door_press.jpg",
+            "feedback_token": "abc123",
+            "actions_triggered": ["phone-ntfy"],
+        }
+        ntfy = MagicMock()
+        ntfy.name = "phone-ntfy"
+        email = MagicMock()
+        email.name = "owner-email"
+        dispatch(doorbell_event, [ntfy, email])
+        ntfy.send.assert_called_once()
+        email.send.assert_not_called()
+        # Receiving notifier sees the full payload — verifies snapshot
+        # and feedback link work without further translation.
+        sent = ntfy.send.call_args.args[0]
+        assert sent["class_name"] == "doorbell_press"
+        assert sent["snapshot_path"].endswith("front-door_press.jpg")

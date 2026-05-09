@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/config/openring.yml")
 CHANNEL = "openring:detections"
 HEALTH_CHANNEL = "openring:health"
+DOORBELL_CHANNEL = "openring:doorbell"
 
 # How long to wait before retrying a failed Redis connection (seconds).
 _REDIS_RECONNECT_DELAY = 5
@@ -235,8 +236,11 @@ def subscribe_loop(
             redis_password = os.environ.get("REDIS_PASSWORD", "") or None
             client = redis_lib.Redis(host=host, port=port, password=redis_password, decode_responses=True)
             pubsub = client.pubsub()
-            pubsub.subscribe(CHANNEL, HEALTH_CHANNEL)
-            logger.info("Subscribed to Redis channels: %s, %s", CHANNEL, HEALTH_CHANNEL)
+            pubsub.subscribe(CHANNEL, HEALTH_CHANNEL, DOORBELL_CHANNEL)
+            logger.info(
+                "Subscribed to Redis channels: %s, %s, %s",
+                CHANNEL, HEALTH_CHANNEL, DOORBELL_CHANNEL,
+            )
             delay = _REDIS_RECONNECT_DELAY  # reset backoff on successful connect
             pathlib.Path("/tmp/healthy").touch(exist_ok=True)
 
@@ -253,16 +257,18 @@ def subscribe_loop(
                     logger.warning("Received malformed message: %s", message["data"])
                     continue
 
-                # Signature verification (detection channel only — health alerts
-                # come from the detector's health publisher, not the detection
-                # publisher, and aren't signed today).
-                if message["channel"] == CHANNEL and hmac_key is not None:
+                # Signature verification (detection + doorbell channels —
+                # health alerts come from the detector's health publisher,
+                # not the detection publisher, and aren't signed today).
+                signed_channels = (CHANNEL, DOORBELL_CHANNEL)
+                if message["channel"] in signed_channels and hmac_key is not None:
                     if not verify_event(event, hmac_key):
                         if not invalid_warned:
                             logger.error(
-                                "Rejecting detection event with invalid/missing "
-                                "HMAC signature — NOT notifying. Camera=%s class=%s. "
+                                "Rejecting %s event with invalid/missing HMAC "
+                                "signature — NOT notifying. Camera=%s class=%s. "
                                 "Further invalid events at DEBUG.",
+                                message["channel"],
                                 event.get("camera_name"),
                                 event.get("class_name"),
                             )
@@ -270,10 +276,12 @@ def subscribe_loop(
                         else:
                             logger.debug("Invalid-signature event rejected")
                         continue
-                elif message["channel"] == CHANNEL and hmac_key is None and not unsigned_warned:
+                elif (message["channel"] in signed_channels
+                      and hmac_key is None and not unsigned_warned):
                     unsigned_warned = True
                     logger.warning(
-                        "Accepting unsigned detection event. Further unsigned events at DEBUG.",
+                        "Accepting unsigned %s event. Further unsigned events at DEBUG.",
+                        message["channel"],
                     )
 
                 # Health alerts get formatted as notification events
@@ -322,12 +330,19 @@ def subscribe_loop(
                 if base_url:
                     event["_base_url"] = base_url
 
-                logger.info(
-                    "Event received: %s from %s (conf=%.2f)",
-                    event.get("class_name"),
-                    event.get("camera_name"),
-                    event.get("confidence", 0.0),
-                )
+                if message["channel"] == DOORBELL_CHANNEL:
+                    logger.info(
+                        "Doorbell press received: device=%s label=%s",
+                        event.get("device_id") or event.get("camera_name"),
+                        event.get("label", "?"),
+                    )
+                else:
+                    logger.info(
+                        "Event received: %s from %s (conf=%.2f)",
+                        event.get("class_name"),
+                        event.get("camera_name"),
+                        event.get("confidence", 0.0),
+                    )
                 dispatch(event, notifiers, notifiers_lock, queue)
 
         except redis_lib.RedisError:
