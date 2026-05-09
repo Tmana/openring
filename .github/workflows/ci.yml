@@ -43,10 +43,13 @@ jobs:
         run: shellcheck services/doorbell-firmware/pi-setup.sh
       - name: shellcheck — setup.sh
         run: shellcheck setup.sh
+      - name: shellcheck — tests/smoke/run.sh
+        run: shellcheck tests/smoke/run.sh
       - name: bash -n syntax check
         run: |
           bash -n setup.sh
           bash -n services/doorbell-firmware/pi-setup.sh
+          bash -n tests/smoke/run.sh
       - name: pi-setup.sh --help
         run: bash services/doorbell-firmware/pi-setup.sh --help
       - name: pi-setup.sh --dry-run
@@ -155,3 +158,31 @@ jobs:
         env:
           PYTHONPATH: services/doorbell-firmware/src
         run: pytest services/doorbell-firmware/tests -v
+
+  # ── Smoke test — host stack end-to-end ──────────────────────────────────
+  # Boots redis + web + notifier (skips detector — its image is huge), opens a
+  # pairing window, registers a fake device, fires a press, asserts the event
+  # row lands in openring.db and that the notifier received it on the bus.
+  # See ROADMAP.md issue #12 for the design.
+  smoke:
+    name: Smoke (compose up + doorbell press)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install jq (curl + docker preinstalled on the runner)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+      - name: Run the smoke test
+        env:
+          SMOKE_DEBUG: "1"     # dump container logs on failure
+        run: ./tests/smoke/run.sh
+      - name: Upload setup/build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logs
+          path: |
+            /tmp/openring-setup.log
+            /tmp/openring-build.log
+            /tmp/openring-up.log
+          if-no-files-found: ignore
