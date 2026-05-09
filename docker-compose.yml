@@ -79,6 +79,7 @@ services:
     environment:
       CONFIG_PATH: /config/openring.yml
       SNAPSHOT_DIR: /data/snapshots
+      CLIPS_DIR: /data/clips
       DB_PATH: /data/openring.db
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       DETECTION_HMAC_KEY: ${DETECTION_HMAC_KEY:-}
