@@ -1,0 +1,22 @@
+# MediaMTX release SHA256 checksums.  pi-setup.sh refuses to install
+# without a matching entry (override with --skip-hash for development).
+#
+# How to update for a new MediaMTX release:
+#   1. Bump MEDIAMTX_VERSION_DEFAULT in pi-setup.sh to the new version.
+#   2. Replace the lines below with the contents of:
+#        https://github.com/bluenviron/mediamtx/releases/download/v<NEW>/checksums.sha256
+#      filtered to just the ``linux_*.tar.gz`` lines (we ignore the
+#      darwin and windows builds — OpenRing's Pi target is Linux).
+#   3. Commit + open a PR.  Reviewers should diff against the upstream
+#      release page to confirm we haven't been MitM'd.
+#
+# Verified: v1.18.1, fetched 2026-05-09 from
+#   https://github.com/bluenviron/mediamtx/releases/download/v1.18.1/checksums.sha256
+#
+# The leading asterisk in the upstream file is `sha256sum` "binary mode";
+# we strip it because pi-setup.sh's grep treats lines as `<hash> <name>`.
+
+b02cc1940885d4f383329a832b97372558e987205c8fd8276f6626ae84428c04  mediamtx_v1.18.1_linux_amd64.tar.gz
+35fe022ac3aab2c26a97472d715798617b56bdfef6ed3e063e52603896971cf1  mediamtx_v1.18.1_linux_arm64.tar.gz
+2717c02288630f0b3aaad82f773a0f819e41fa795eba360486bd0264f7cc5878  mediamtx_v1.18.1_linux_armv6.tar.gz
+64eb41865982a2e9b62bb66f6e40f8be3ba0e4d74a66f9fdceb3d4fee91e954a  mediamtx_v1.18.1_linux_armv7.tar.gz

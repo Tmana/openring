@@ -31,6 +31,33 @@ jobs:
             services/doorbell-firmware/src \
             shared
 
+  # ── Shellcheck (Pi-side installer) ─────────────────────────────────────
+  shellcheck:
+    name: Shellcheck (pi-setup.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - name: shellcheck
+        run: shellcheck services/doorbell-firmware/pi-setup.sh
+      - name: bash -n syntax check
+        run: bash -n services/doorbell-firmware/pi-setup.sh
+      - name: --help works
+        run: bash services/doorbell-firmware/pi-setup.sh --help
+      - name: --dry-run with valid args
+        run: bash services/doorbell-firmware/pi-setup.sh --dry-run --host-url https://openring.test --device-id front-door
+      - name: rejects bad device-id
+        run: |
+          set +e
+          bash services/doorbell-firmware/pi-setup.sh --dry-run --host-url https://h --device-id "Bad ID"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "expected nonzero exit on bad device-id, got 0"
+            exit 1
+          fi
+
   # ── Type check ──────────────────────────────────────────────────────────
   # Detector is excluded — it imports torch / opencv / ultralytics which
   # are only present on the inference image.
