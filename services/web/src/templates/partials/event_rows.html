@@ -22,8 +22,15 @@
        {% if e.bbox and e.frame_size %}
        data-bbox="{{ e.bbox | tojson }}"
        data-frame-size="{{ e.frame_size | tojson }}"
+       {% endif %}
+       {% if e.clip and e.clip.url %}
+       data-clip-url="{{ e.clip.url }}"
+       data-clip-duration="{{ e.clip.duration_seconds or '' }}"
        {% endif %}>
       <img src="/snapshots/{{ fname }}" width="80" loading="lazy">
+      {% if e.clip and e.clip.url %}
+      <span class="clip-badge" title="Video clip available — click to play">▶</span>
+      {% endif %}
     </a>
     {% else %}&mdash;{% endif %}
   </td>

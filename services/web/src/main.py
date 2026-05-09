@@ -42,16 +42,19 @@ backup_manager: ConfigBackupManager | None = None
 _src = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=str(_src / "static")), name="static")
 
-# Snapshots and model files live on shared volumes; serve them directly.
+# Snapshots, model files, and (v0.2) clips live on shared volumes; serve them directly.
 SNAPSHOT_DIR = os.environ.get("SNAPSHOT_DIR", "/data/snapshots")
 MODELS_DIR = os.environ.get("MODELS_DIR", "/models")
+CLIPS_DIR = os.environ.get("CLIPS_DIR", "/data/clips")
 AUTH_DB_PATH = os.environ.get("AUTH_DB_PATH", "/data/auth.db")
 
 Path(SNAPSHOT_DIR).mkdir(parents=True, exist_ok=True)
 Path(MODELS_DIR).mkdir(parents=True, exist_ok=True)
+Path(CLIPS_DIR).mkdir(parents=True, exist_ok=True)
 
 app.mount("/snapshots", StaticFiles(directory=SNAPSHOT_DIR), name="snapshots")
 app.mount("/model-files", StaticFiles(directory=MODELS_DIR), name="model-files")
+app.mount("/clips", StaticFiles(directory=CLIPS_DIR), name="clips")
 
 # ── Startup ────────────────────────────────────────────────────────────────────
 
