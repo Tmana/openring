@@ -458,6 +458,7 @@ def main() -> None:
         snapshot_dir=SNAPSHOT_DIR,
         db_path=DB_PATH,
         retention_days=retention_days,
+        clips_dir=os.environ.get("CLIPS_DIR", "/data/clips"),
     )
     cleaner.start()
 
