@@ -72,6 +72,12 @@ async def _startup() -> None:
     backup_manager = ConfigBackupManager()
     backup_manager.start()
 
+    # v0.2 #16: heartbeat watchdog runs as a daemon thread that polls
+    # device_tokens.last_seen_at and publishes ``openring:device``
+    # events on online ↔ offline transitions for the notifier to dispatch.
+    from heartbeat_watchdog import start_watchdog
+    start_watchdog()
+
 
 def _check_db_integrity() -> None:
     """Run ``PRAGMA integrity_check`` on each SQLite DB at startup.
