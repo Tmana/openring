@@ -83,6 +83,8 @@ docker compose restart detector
 
 `setup.sh --help` and `pi-setup.sh --help` document every flag. Both scripts have a `--dry-run` mode if you want to preview what they'd do before letting them touch anything.
 
+For the long-form walkthrough — expected output at every step, troubleshooting, and the small decisions you'll have to make — see [`docs/QUICKSTART.md`](docs/QUICKSTART.md).
+
 ## Local-only, in practice
 
 OpenRing **never** makes an outbound connection to a third party that we control. The only outbound traffic is whatever notification channel *you* configure (your ntfy server, Discord webhook, SMTP relay). If you point all of those at services running on your own LAN, OpenRing is completely air-gapped.
