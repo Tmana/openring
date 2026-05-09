@@ -3,10 +3,7 @@ name: openring
 # OpenRing host stack.
 #
 # Image names assume you build locally for now (`docker compose build`).
-# Once we publish to GHCR (post-v0.1), set GHCR_OWNER in a .env file.
-#
-# This file is a v0.0 skeleton — services are listed but Dockerfiles
-# don't exist yet. See ROADMAP.md issue #2 for the porting work.
+# Once we publish to GHCR, set GHCR_OWNER in a .env file.
 
 services:
 
@@ -23,7 +20,7 @@ services:
       fi'
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      OPENRING_HMAC_KEY: ${OPENRING_HMAC_KEY:-}
+      DETECTION_HMAC_KEY: ${DETECTION_HMAC_KEY:-}
     healthcheck:
       test: >-
         sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
@@ -43,38 +40,54 @@ services:
     cap_drop: [ALL]
 
   # ── Caddy reverse proxy ──────────────────────────────────────────────
-  # Stub — Dockerfile lands with issue #2.
   caddy:
     build:
       context: .
       dockerfile: services/caddy/Dockerfile
     image: openring-caddy:${IMAGE_TAG:-dev}
-    profiles: ["full"]   # exclude until we've actually built it
+    user: "999:999"
     ports:
       - "${HTTP_PORT:-80}:80"
       - "${HTTPS_PORT:-443}:443"
     volumes:
       - openring-caddy:/data
       - openring-config:/config:ro
+    environment:
+      CONFIG_PATH: /config/openring.yml
+      HTTPS_PORT: ${HTTPS_PORT:-443}
+      XDG_CONFIG_HOME: /data/caddy/config
     depends_on:
       web:
         condition: service_started
     restart: unless-stopped
     mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 100
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
 
   # ── Detector ─────────────────────────────────────────────────────────
+  # GPU support requires the NVIDIA Container Runtime on the host.
+  # For CPU-only inference (the typical home-server case) the default
+  # image works as-is.
   detector:
     build:
       context: .
       dockerfile: services/detector/Dockerfile
     image: openring-detector:${IMAGE_TAG:-dev}
-    profiles: ["full"]
     environment:
       CONFIG_PATH: /config/openring.yml
       SNAPSHOT_DIR: /data/snapshots
       DB_PATH: /data/openring.db
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      OPENRING_HMAC_KEY: ${OPENRING_HMAC_KEY:-}
+      DETECTION_HMAC_KEY: ${DETECTION_HMAC_KEY:-}
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/healthy -mmin -1 | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
       - openring-config:/config:ro
       - openring-models:/models:ro
@@ -84,6 +97,11 @@ services:
         condition: service_healthy
     restart: unless-stopped
     mem_limit: 3g
+    cpus: 4.0
+    pids_limit: 200
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
 
   # ── Web UI ───────────────────────────────────────────────────────────
   web:
@@ -91,23 +109,35 @@ services:
       context: .
       dockerfile: services/web/Dockerfile
     image: openring-web:${IMAGE_TAG:-dev}
-    profiles: ["full"]
     environment:
       CONFIG_PATH: /config/openring.yml
       SNAPSHOT_DIR: /data/snapshots
       CLIPS_DIR: /data/clips
+      MODELS_DIR: /models
       DB_PATH: /data/openring.db
       AUTH_DB_PATH: /data/auth.db
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      OPENRING_HMAC_KEY: ${OPENRING_HMAC_KEY:-}
+      DETECTION_HMAC_KEY: ${DETECTION_HMAC_KEY:-}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     volumes:
       - openring-config:/config
+      - openring-models:/models
       - openring-data:/data
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
     mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 200
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
 
   # ── Notifier ─────────────────────────────────────────────────────────
   notifier:
@@ -115,21 +145,38 @@ services:
       context: .
       dockerfile: services/notifier/Dockerfile
     image: openring-notifier:${IMAGE_TAG:-dev}
-    profiles: ["full"]
     environment:
       CONFIG_PATH: /config/openring.yml
+      NOTIFIER_STATE_DIR: /var/lib/openring
       DB_PATH: /data/openring.db
       SNAPSHOT_DIR: /data/snapshots
+      MODELS_DIR: /models
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      OPENRING_HMAC_KEY: ${OPENRING_HMAC_KEY:-}
+      DETECTION_HMAC_KEY: ${DETECTION_HMAC_KEY:-}
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/healthy -mmin -1 | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
     volumes:
       - openring-config:/config:ro
+      - openring-models:/models:ro
       - openring-data:/data:ro
+      - openring-notifier:/var/lib/openring
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
     mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
 
 volumes:
   openring-config:
@@ -142,3 +189,5 @@ volumes:
     name: openring-redis
   openring-caddy:
     name: openring-caddy
+  openring-notifier:
+    name: openring-notifier

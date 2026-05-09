@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>First-run Setup — OpenRing</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .setup-box { width: 100%; max-width: 420px; }
+    .setup-box h1 { text-align: center; margin-bottom: 0.5rem; }
+    .setup-box .subtitle { text-align: center; color: var(--muted); font-size: 0.875rem; margin-bottom: 1.5rem; }
+  </style>
+</head>
+<body>
+  <div class="setup-box">
+    <h1>OpenRing 🐟</h1>
+    <p class="subtitle">Create your admin account to get started</p>
+
+    {% if error %}
+    <div class="alert alert-err">{{ error }}</div>
+    {% endif %}
+
+    <div class="card">
+      <p class="hint" style="margin-bottom:1rem;">
+        No accounts exist yet. Create the initial admin account below.
+        This page will not be accessible again once an account has been created.
+      </p>
+
+      <form method="post" action="/setup">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        {% if token %}
+        <input type="hidden" name="token" value="{{ token }}">
+        {% endif %}
+        <div class="field-group">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username" autocomplete="username"
+                 autofocus required>
+        </div>
+        <div class="field-group">
+          <label for="password">Password (min. 12 characters)</label>
+          <input type="password" id="password" name="password" autocomplete="new-password"
+                 minlength="12" required>
+        </div>
+        <div class="field-group">
+          <label for="confirm_password">Confirm password</label>
+          <input type="password" id="confirm_password" name="confirm_password"
+                 autocomplete="new-password" minlength="12" required>
+        </div>
+        {% if not token %}
+        <div class="field-group">
+          <label for="token_input">Bootstrap token</label>
+          <input type="text" id="token_input" name="token" required
+                 placeholder="Paste the token from server logs">
+          <p class="hint" style="margin-top:0.25rem;font-size:0.8rem;">
+            Find this in <code>docker compose logs web</code>.
+          </p>
+        </div>
+        {% endif %}
+
+        <button type="submit" style="width:100%;margin-top:0.5rem;">Create admin account</button>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

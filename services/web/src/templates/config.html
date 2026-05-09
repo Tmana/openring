@@ -1,0 +1,648 @@
+{% extends "base.html" %}
+{% block title %}Config — OpenRing{% endblock %}
+{% block content %}
+<h1>Configuration</h1>
+
+{% if read_only %}
+<div class="readonly-banner">
+  <strong>Read-only view.</strong>  You are signed in as a viewer.  Sensitive
+  values (camera RTSP URLs, Discord webhooks, SMTP passwords, API tokens)
+  are masked as <code>***REDACTED***</code>, and the Advanced / raw YAML
+  tab is hidden.  Log in as an admin to make changes.
+</div>
+{% endif %}
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="tab-settings">Settings</button>
+  {% if not read_only %}
+  <button class="tab-btn" data-tab="tab-advanced">Advanced / Raw YAML</button>
+  {% endif %}
+</div>
+
+{# ── Settings tab ─────────────────────────────────────────────────────────── #}
+<div id="tab-settings" class="tab-panel active">
+
+  <div id="form-banner"></div>
+
+  <div class="mode-toggle">
+    <label class="toggle-label">
+      <input type="checkbox" id="expert-mode-toggle" onchange="toggleExpertMode(this.checked)">
+      <span class="toggle-track"></span>
+      Expert mode
+    </label>
+  </div>
+
+  {# ── Settings sub-tabs ──────────────────────────────────────────────────── #}
+  <div class="settings-subtabs" role="tablist" aria-label="Settings sections">
+    <button type="button" class="subtab-btn active" data-subtab="system">System</button>
+    <button type="button" class="subtab-btn" data-subtab="detection">Detection</button>
+    <button type="button" class="subtab-btn" data-subtab="cameras">Cameras</button>
+    <button type="button" class="subtab-btn" data-subtab="notifications">Notifications</button>
+    <button type="button" class="subtab-btn subtab-advanced expert-only" data-subtab="advanced">Advanced</button>
+  </div>
+
+  {# ── System ───────────────────────────────────────────────────────────────── #}
+  <div class="config-section" id="section-system" data-subtab="system">
+    <div class="config-section-header" onclick="toggleSection('section-system')">
+      <span class="config-section-label">System</span>
+      <span class="config-section-chevron">▾</span>
+    </div>
+    <div class="config-section-body">
+      <div class="card">
+        <div class="field-row">
+          <div class="field-group">
+            <label class="toggle-label">
+              <input type="checkbox" id="sys-armed" {% if cfg.system.armed %}checked{% endif %}>
+              <span class="toggle-track"></span>
+              Armed (detections trigger notifications)
+            </label>
+          </div>
+          <div class="field-group">
+            <label>Log level</label>
+            <select id="sys-log-level">
+              {% for level in ["debug","info","warning","error"] %}
+              <option value="{{ level }}" {% if cfg.system.log_level == level %}selected{% endif %}>{{ level }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label>Timezone (IANA name)</label>
+            <input list="tz-list" id="sys-timezone" value="{{ cfg.system.timezone }}"
+                   placeholder="Start typing to search…" autocomplete="off">
+            <datalist id="tz-list">
+              {% for tz in timezones %}<option value="{{ tz }}">{% endfor %}
+            </datalist>
+          </div>
+          <div class="field-group">
+            <label>Data retention (days, 0 = keep forever)</label>
+            <input type="number" id="sys-retention" value="{{ cfg.system.retention_days | default(90) }}"
+                   min="0" max="365">
+            <p class="hint">Applies to snapshots, events, visits, and metrics</p>
+          </div>
+        </div>
+        {# base_url removed in v0.12.4 — derived from tls.domain at runtime #}
+        <div class="field-row expert-only">
+          <div class="field-group">
+            <label>Stats polling interval (seconds, 1-60)</label>
+            <input type="number" id="sys-stats-interval" value="{{ cfg.system.stats_interval }}"
+                   min="1" max="60">
+          </div>
+          <div class="field-group">
+            <label>Visit timeout (seconds)</label>
+            <input type="number" id="visit_timeout_seconds" min="60" max="3600"
+                   value="{{ cfg.system.visit_timeout_seconds | default(300) }}">
+          </div>
+        </div>
+        <div class="field-row expert-only">
+          <div class="field-group">
+            <label>Training Nudge Threshold</label>
+            <input type="number" id="training_nudge_threshold" value="{{ cfg.system.training_nudge_threshold | default(100) }}" min="10" max="10000">
+            <p class="hint">Show training data banner on dashboard when this many labeled events exist since last export</p>
+          </div>
+        </div>
+        <div class="field-row expert-only">
+          <div class="field-group">
+            <label>Camera offline alert threshold (minutes)</label>
+            <input type="number" id="camera_health_alert_threshold_minutes" min="1" max="1440"
+                   value="{{ cfg.system.camera_health.alert_threshold_minutes | default(10) }}">
+          </div>
+          <div class="field-group">
+            <label>Camera health debounce (seconds)</label>
+            <input type="number" id="camera_health_debounce_seconds" min="5" max="300"
+                   value="{{ cfg.system.camera_health.debounce_seconds | default(30) }}">
+          </div>
+        </div>
+        <div class="field-row expert-only">
+          <div class="field-group">
+            <label>Config backup limit</label>
+            <input type="number" id="backup_max_backups" min="5" max="500"
+                   value="{{ cfg.system.backup.max_backups | default(50) }}">
+            <p class="hint">Maximum number of config backups to keep (5-500)</p>
+          </div>
+          <div class="field-group">
+            <label>Backup debounce (seconds)</label>
+            <input type="number" id="backup_debounce_seconds" min="30" max="600"
+                   value="{{ cfg.system.backup.debounce_seconds | default(180) }}">
+            <p class="hint">Delay after config save before taking backup — prevents rapid-fire backups during editing (30-600)</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Summary Reports ──────────────────────────────────────────────────────── #}
+  <div class="config-section expert-only" id="section-summary-report" data-subtab="system">
+    <div class="config-section-header" onclick="toggleSection('section-summary-report')">
+      <span class="config-section-label">Summary Reports</span>
+      <span class="config-section-chevron">▾</span>
+    </div>
+    <div class="config-section-body">
+      <div class="card">
+        <div class="field-row">
+          <div class="field-group">
+            <label><input type="checkbox" id="summary-report-enabled"
+              {% if cfg.system.summary_report.enabled %}checked{% endif %}> Enable scheduled digest</label>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label>Frequency</label>
+            <select id="summary-report-frequency">
+              <option value="daily" {% if cfg.system.summary_report.frequency == 'daily' %}selected{% endif %}>Daily</option>
+              <option value="weekly" {% if cfg.system.summary_report.frequency == 'weekly' %}selected{% endif %}>Weekly (Mondays)</option>
+              <option value="monthly" {% if cfg.system.summary_report.frequency == 'monthly' %}selected{% endif %}>Monthly (1st)</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label>Send at (HH:MM)</label>
+            <input type="text" id="summary-report-time" value="{{ cfg.system.summary_report.time | default('07:00') }}"
+                   placeholder="07:00" maxlength="5">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group" style="flex:1;">
+            <label>Channels (comma-separated names)</label>
+            <input type="text" id="summary-report-channels"
+                   value="{{ cfg.system.summary_report.channels | join(', ') }}"
+                   placeholder="e.g. pond-alerts, email-digest">
+            <p class="hint">Names of notification channels to receive the digest</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Cameras ──────────────────────────────────────────────────────────────── #}
+  <div class="config-section" id="section-cameras" data-subtab="cameras">
+    <div class="config-section-header" onclick="toggleSection('section-cameras')">
+      <span class="config-section-label">Cameras</span>
+      <span class="config-section-chevron">▾</span>
+    </div>
+    <div class="config-section-body">
+      <div class="card">
+        <script id="cameras-data" type="application/json">
+          {{ cameras_json | safe }}
+        </script>
+        <script id="groups-data" type="application/json">
+          {{ groups_json | safe }}
+        </script>
+        <script>
+          window._availableModels = {{ available_models | tojson }};
+          window._availableGroups = JSON.parse(document.getElementById("groups-data").textContent);
+          window.OPENRING_READ_ONLY = {{ read_only|default(false)|tojson }};
+        </script>
+        <div id="cameras-list"></div>
+        {% if not read_only %}
+        <button type="button" class="btn-add" onclick="addCamera()">+ Add Camera</button>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ── Detection ────────────────────────────────────────────────────────────── #}
+  <div class="config-section" id="section-detection" data-subtab="detection">
+    <div class="config-section-header" onclick="toggleSection('section-detection')">
+      <span class="config-section-label">Detection</span>
+      <span class="config-section-chevron">▾</span>
+    </div>
+    <div class="config-section-body">
+      <div class="card">
+        <div class="field-group">
+          <label>Model path (inside container)</label>
+          {% if available_models %}
+          <select id="det-model-path">
+            {% for m in available_models %}
+            <option value="{{ m }}" {% if m == cfg.detection.model_path %}selected{% endif %}>{{ m }}</option>
+            {% endfor %}
+            {% if cfg.detection.model_path not in available_models %}
+            <option value="{{ cfg.detection.model_path }}" selected>{{ cfg.detection.model_path }} (current)</option>
+            {% endif %}
+          </select>
+          {% else %}
+          <input type="text" id="det-model-path" value="{{ cfg.detection.model_path }}" placeholder="/models/yolov8n.pt">
+          {% endif %}
+        </div>
+        <div class="field-group">
+          <label>Confidence threshold</label>
+          <div class="slider-row">
+            <input type="range" id="conf-slider" min="0" max="1" step="0.01"
+                   value="{{ cfg.detection.confidence_threshold }}">
+            <span class="slider-value" id="conf-value">{{ "%.2f"|format(cfg.detection.confidence_threshold) }}</span>
+          </div>
+        </div>
+        <div class="field-group">
+          <label>Target classes (comma-separated)</label>
+          <input type="text" id="target-classes" value="{{ cfg.detection.target_classes | join(', ') }}"
+                 placeholder="bird, great_blue_heron, duck">
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label>Cooldown between events (seconds)</label>
+            <input type="number" id="det-cooldown" value="{{ cfg.detection.cooldown_seconds }}" min="1" max="3600">
+          </div>
+          <div class="field-group expert-only">
+            <label>Frame skip (process every Nth frame)</label>
+            <input type="number" id="det-frame-skip" value="{{ cfg.detection.frame_skip }}" min="1" max="60">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Notification Channels (named, multi-instance) ───────────────────────── #}
+  <div class="config-section" id="section-channels" data-subtab="notifications">
+    <div class="config-section-header" onclick="toggleSection('section-channels')">
+      <span class="config-section-label">Notification Channels</span>
+      <span class="config-section-chevron">▾</span>
+    </div>
+    <div class="config-section-body">
+      <div class="card">
+        <p class="hint">
+          Named notification channels let you send alerts to multiple destinations — multiple
+          Discord webhooks, email addresses, or custom HTTP endpoints. Each channel has a unique
+          name used by action rules.
+        </p>
+        <script id="channels-data" type="application/json">{{ channels_json | safe }}</script>
+        <div id="channels-list"></div>
+        <div style="margin-top:0.5rem;display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <button type="button" class="btn-add" onclick="addChannel('discord')">+ Discord</button>
+          <button type="button" class="btn-add" onclick="addChannel('email')">+ Email</button>
+          <button type="button" class="btn-add" onclick="addChannel('webhook')">+ Webhook</button>
+          <button type="button" class="btn-add" onclick="addChannel('ntfy')">+ Ntfy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Schedule ─────────────────────────────────────────────────────────────── #}
+  <div class="config-section expert-only" id="section-schedule" data-subtab="advanced">
+    <div class="config-section-header" onclick="toggleSection('section-schedule')">
+      <span class="config-section-label">Schedule (Auto Arm/Disarm)</span>
+      <span class="config-section-chevron">▾</span>
+    </div>
+    <div class="config-section-body">
+      <div class="card">
+        <div class="field-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="sched-enabled"
+                   {% if cfg.system.schedule.enabled %}checked{% endif %}>
+            <span class="toggle-track"></span>
+            Enable schedule
+          </label>
+        </div>
+        <p class="hint">
+          Automatically arm at dawn and disarm at dusk. Uses 24-hour format (e.g. <code>06:00</code>).
+          Manual arm/disarm overrides the schedule until the next scheduled transition.
+          Enable solar mode to use sunrise/sunset instead of fixed times.
+        </p>
+        <div class="field-row">
+          <div class="field-group">
+            <label>Arm time (HH:MM, 24h)</label>
+            <input type="text" id="sched-arm-time"
+                   value="{{ cfg.system.schedule.arm_time }}" placeholder="06:00">
+          </div>
+          <div class="field-group">
+            <label>Disarm time (HH:MM, 24h)</label>
+            <input type="text" id="sched-disarm-time"
+                   value="{{ cfg.system.schedule.disarm_time }}" placeholder="20:00">
+          </div>
+        </div>
+        <div class="field-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="sched-use-solar"
+                   {% if cfg.system.schedule.use_solar %}checked{% endif %}
+                   onchange="toggleSolar(this.checked)">
+            <span class="toggle-track"></span>
+            Use sunrise/sunset instead of fixed times
+          </label>
+        </div>
+        <div id="sched-solar-fields" style="display:{% if cfg.system.schedule.use_solar %}block{% else %}none{% endif %};">
+          <div class="field-row">
+            <div class="field-group">
+              <label>Latitude</label>
+              <input type="number" id="sched-lat" step="0.0001"
+                     value="{{ cfg.system.schedule.latitude or '' }}" placeholder="37.7749">
+            </div>
+            <div class="field-group">
+              <label>Longitude</label>
+              <input type="number" id="sched-lon" step="0.0001"
+                     value="{{ cfg.system.schedule.longitude or '' }}" placeholder="-122.4194">
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Auth ─────────────────────────────────────────────────────────────── #}
+  <div class="config-section expert-only" id="section-auth" data-subtab="advanced">
+    <div class="config-section-header" onclick="toggleSection('section-auth')">
+      <span class="config-section-label">Authentication</span>
+      <span class="config-section-chevron">▾</span>
+    </div>
+    <div class="config-section-body">
+      <div class="card">
+        <p class="hint">
+          Gates all web UI routes behind a login page.
+          Pair with TLS when accessible beyond your LAN.
+          When disabled, anyone on the network can access the dashboard and admin tools.
+        </p>
+        <div class="field-row">
+          <div class="field-group">
+            <label class="toggle-label">
+              <input type="checkbox" id="auth-enabled" {% if cfg.system.auth.enabled %}checked{% endif %}>
+              <span class="toggle-track"></span>
+              Enable authentication
+            </label>
+          </div>
+          <div class="field-group">
+            <label class="toggle-label">
+              <input type="checkbox" id="auth-require-api" {% if cfg.system.auth.require_api_auth %}checked{% endif %}>
+              <span class="toggle-track"></span>
+              Require Bearer token on API / SSE endpoints
+            </label>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label>Session timeout (hours)</label>
+            <input type="number" id="auth-session-timeout" value="{{ cfg.system.auth.session_timeout_hours }}"
+                   min="1" max="8760">
+          </div>
+          <div class="field-group">
+            <label>Max login attempts before lockout</label>
+            <input type="number" id="auth-max-attempts" value="{{ cfg.system.auth.max_login_attempts }}"
+                   min="1" max="100">
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field-group">
+            <label>Lockout duration (minutes)</label>
+            <input type="number" id="auth-lockout-minutes" value="{{ cfg.system.auth.lockout_duration_minutes }}"
+                   min="1" max="1440">
+          </div>
+          <div class="field-group">
+            <label>Non-admin auto-rearm delay (minutes, 0 to disable)</label>
+            <input type="number" id="auth-rearm-minutes" value="{{ cfg.system.auth.nonadmin_rearm_minutes }}"
+                   min="0" max="1440">
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── TLS ────────────────────────────────────────────────────────────────── #}
+  <div class="config-section" id="section-deterrent" data-subtab="advanced">
+    <div class="config-section-header" onclick="toggleSection('section-deterrent')">
+      <span class="config-section-label">Deterrent</span>
+      <span class="config-section-chevron">▾</span>
+    </div>
+    <div class="config-section-body">
+      <div class="card">
+        <p class="hint">
+          Physical deterrence via Tuya smart devices (sprinklers, lights, sirens).
+          {% if not read_only %}Configure devices on the <a href="/admin/deterrent">Deterrent page</a>.{% endif %}
+        </p>
+        <div class="field-group">
+          <label class="toggle-label">
+            <input type="checkbox" id="deterrent-enabled" {% if cfg.deterrent.enabled %}checked{% endif %}>
+            <span class="toggle-track"></span>
+            Enable physical deterrence
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="config-section expert-only" id="section-tls" data-subtab="advanced">
+    <div class="config-section-header" onclick="toggleSection('section-tls')">
+      <span class="config-section-label">TLS</span>
+      <span class="config-section-chevron">▾</span>
+    </div>
+    <div class="config-section-body">
+      <div class="card">
+        <p class="hint">
+          HTTPS for the web UI, handled by the Caddy reverse proxy.
+          Changes take effect within a few seconds (no restart required).
+        </p>
+        <div class="field-group">
+          <label>TLS Mode</label>
+          <select id="tls-mode" onchange="toggleTlsFields()">
+            <option value="off" {% if cfg.tls.mode == 'off' %}selected{% endif %}>Off (HTTP only &mdash; LAN use)</option>
+            <option value="auto" {% if cfg.tls.mode == 'auto' %}selected{% endif %}>Automatic (Let's Encrypt)</option>
+            <option value="manual" {% if cfg.tls.mode == 'manual' %}selected{% endif %}>Manual (own certificates)</option>
+          </select>
+        </div>
+        <div id="tls-domain-field" style="display:none;">
+          <div class="field-group">
+            <label>Domain name</label>
+            <input type="text" id="tls-domain" value="{{ cfg.tls.domain }}"
+                   placeholder="openring.example.com">
+            <span class="hint" id="tls-domain-hint-auto">Must point to this server's public IP. Caddy will obtain a certificate automatically.</span>
+            <span class="hint" id="tls-domain-hint-manual" style="display:none;">Used to build notification feedback links (e.g. https://your-domain/feedback/…).</span>
+          </div>
+        </div>
+        <div id="tls-manual-fields" style="display:none;">
+          <div class="field-row">
+            <div class="field-group">
+              <label>Certificate path</label>
+              <input type="text" id="tls-cert-path" value="{{ cfg.tls.cert_path }}"
+                     placeholder="/config/certs/cert.pem">
+            </div>
+            <div class="field-group">
+              <label>Key path</label>
+              <input type="text" id="tls-key-path" value="{{ cfg.tls.key_path }}"
+                     placeholder="/config/certs/key.pem">
+            </div>
+          </div>
+          <p class="hint" style="margin-top:0.75rem;">
+            Upload PEM files or paste their contents below. Files are written to <code>/config/certs/</code>.
+          </p>
+          <div class="cert-upload-tabs" style="display:flex;gap:0.5rem;margin-bottom:0.5rem;">
+            <button type="button" class="btn-secondary cert-tab-btn active" onclick="switchCertTab('upload',this)">Upload files</button>
+            <button type="button" class="btn-secondary cert-tab-btn" onclick="switchCertTab('paste',this)">Paste PEM</button>
+          </div>
+          <div id="cert-tab-upload">
+            <div class="field-row">
+              <div class="field-group">
+                <label>Certificate file (.pem)</label>
+                <input type="file" id="tls-cert-file" accept=".pem,.crt,.cer">
+              </div>
+              <div class="field-group">
+                <label>Key file (.pem)</label>
+                <input type="file" id="tls-key-file" accept=".pem,.key">
+              </div>
+            </div>
+          </div>
+          <div id="cert-tab-paste" style="display:none;">
+            <div class="field-group">
+              <label>Certificate PEM</label>
+              <textarea id="tls-cert-pem" rows="4" placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----" style="font-family:var(--mono);font-size:0.8rem;"></textarea>
+            </div>
+            <div class="field-group" style="margin-top:0.5rem;">
+              <label>Key PEM</label>
+              <textarea id="tls-key-pem" rows="4" placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----" style="font-family:var(--mono);font-size:0.8rem;"></textarea>
+            </div>
+          </div>
+          <button type="button" class="btn-secondary" onclick="uploadCerts()" style="margin-top:0.5rem;" id="cert-upload-btn">Upload certificates</button>
+          <span id="cert-upload-status" class="hint" style="margin-left:0.5rem;"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    function toggleTlsFields() {
+      var mode = document.getElementById('tls-mode').value;
+      document.getElementById('tls-domain-field').style.display = (mode === 'auto' || mode === 'manual') ? '' : 'none';
+      document.getElementById('tls-domain-hint-auto').style.display = mode === 'auto' ? '' : 'none';
+      document.getElementById('tls-domain-hint-manual').style.display = mode === 'manual' ? '' : 'none';
+      document.getElementById('tls-manual-fields').style.display = mode === 'manual' ? '' : 'none';
+    }
+    toggleTlsFields();
+
+    function switchCertTab(tab, btn) {
+      document.getElementById('cert-tab-upload').style.display = tab === 'upload' ? '' : 'none';
+      document.getElementById('cert-tab-paste').style.display = tab === 'paste' ? '' : 'none';
+      document.querySelectorAll('.cert-tab-btn').forEach(function(b) { b.classList.remove('active'); });
+      btn.classList.add('active');
+    }
+
+    async function uploadCerts() {
+      var status = document.getElementById('cert-upload-status');
+      var btn = document.getElementById('cert-upload-btn');
+      btn.disabled = true;
+      status.textContent = 'Uploading...';
+      status.style.color = '';
+
+      var fd = new FormData();
+      var certFile = document.getElementById('tls-cert-file').files[0];
+      var keyFile = document.getElementById('tls-key-file').files[0];
+      var certPem = document.getElementById('tls-cert-pem').value;
+      var keyPem = document.getElementById('tls-key-pem').value;
+
+      if (certFile) fd.append('cert_file', certFile);
+      if (keyFile) fd.append('key_file', keyFile);
+      if (certPem) fd.append('cert_pem', certPem);
+      if (keyPem) fd.append('key_pem', keyPem);
+
+      try {
+        var resp = await fetch('/config/tls/upload-cert', {
+          method: 'POST',
+          body: fd,
+          headers: {'X-CSRF-Token': getCsrfToken()}
+        });
+        var data = await resp.json();
+        if (data.ok) {
+          status.textContent = 'Uploaded: ' + data.written.join(', ');
+          status.style.color = 'var(--ok)';
+        } else {
+          status.textContent = data.error || 'Upload failed';
+          status.style.color = 'var(--danger)';
+        }
+      } catch (e) {
+        status.textContent = 'Network error: ' + e.message;
+        status.style.color = 'var(--danger)';
+      }
+      btn.disabled = false;
+    }
+  </script>
+
+  {% if not read_only %}
+  <button id="save-btn" type="button" onclick="saveConfig()">Save</button>
+  {% endif %}
+
+</div>{# /tab-settings #}
+
+{# ── Advanced tab — hidden for read-only admins (raw YAML may contain secrets) #}
+{% if not read_only %}
+<div id="tab-advanced" class="tab-panel">
+
+  {% if saved %}
+  <div class="alert alert-ok">Config saved successfully.</div>
+  {% endif %}
+  {% if error %}
+  <div class="alert alert-err">Error: {{ error }}</div>
+  {% endif %}
+  {% if warnings %}
+  <div class="alert alert-warn">
+    <strong>Warnings:</strong>
+    <ul style="margin:0.3em 0 0;padding-left:1.2em;">
+      {% for w in warnings %}<li>{{ w }}</li>{% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <p class="hint">
+    Direct YAML editor. Changes here are applied immediately on save.
+    Services reload within ~10 seconds — no restart required.
+  </p>
+
+  <form method="post" action="/config">
+    <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+    <textarea name="raw_yaml" rows="40" style="width:100%;font-family:monospace;font-size:0.85rem;">{{ raw_yaml }}</textarea>
+    <div style="margin-top:0.5rem;">
+      <button type="submit">Save</button>
+    </div>
+  </form>
+
+</div>{# /tab-advanced #}
+{% endif %}
+
+<script src="/static/chip-picker.js"></script>
+<script src="/static/config.js"></script>
+{% if read_only %}
+<script>
+  // Read-only admin mode: disable every form input inside the settings tab
+  // and hide every "Add", "Save", "Test", "Upload", "Remove" button.  The
+  // server-side guard in route_auth.require_admin still rejects any POST
+  // a determined client might forge, but this keeps the UI obviously
+  // read-only without requiring per-field template branches.
+  (function readOnlyHardening() {
+    function apply() {
+      var panel = document.getElementById('tab-settings');
+      if (!panel) return;
+      // Disable every form control under the settings tab.
+      var controls = panel.querySelectorAll('input, select, textarea');
+      for (var i = 0; i < controls.length; i++) {
+        var el = controls[i];
+        // Leave the expert-mode toggle alone so viewers can still reveal
+        // advanced sections if they want (it's a client-side only flag).
+        if (el.id === 'expert-mode-toggle') continue;
+        el.disabled = true;
+      }
+      // Hide buttons that would trigger writes.  These are all the
+      // button.btn-add, the Save button, and any inline Test/Upload/Remove
+      // buttons that config.js wires up dynamically.
+      var hideSelectors = [
+        '#save-btn',
+        '.btn-add',
+        '.btn-remove',
+        '.btn-test',
+        '.btn-upload',
+        'button[onclick*="Save"]',
+        'button[onclick*="save"]',
+        'button[onclick*="test"]',
+        'button[onclick*="upload"]',
+        'button[onclick*="remove"]',
+        'button[onclick*="add"]',
+      ];
+      for (var j = 0; j < hideSelectors.length; j++) {
+        var matches = panel.querySelectorAll(hideSelectors[j]);
+        for (var k = 0; k < matches.length; k++) matches[k].style.display = 'none';
+      }
+    }
+    // Run on load AND re-run after config.js hydrates the dynamic camera /
+    // channel cards (they get created after DOMContentLoaded).  A simple
+    // MutationObserver on the two lists covers the "card just added"
+    // cases without racing.
+    document.addEventListener('DOMContentLoaded', apply);
+    var target = document.getElementById('tab-settings');
+    if (target && window.MutationObserver) {
+      new MutationObserver(apply).observe(target, { childList: true, subtree: true });
+    }
+  })();
+</script>
+{% endif %}
+{% endblock %}
