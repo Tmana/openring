@@ -455,6 +455,54 @@ def set_app_state(key: str, value: str) -> None:
         pass
 
 
+# ── Doorbell pairing window (v0.1) ─────────────────────────────────────────
+#
+# An admin opens a 5-minute window from the web UI; during that window an
+# unpaired Pi can POST /api/doorbell/register and receive a fresh device
+# token.  Window state is kept in app_state under a single key so a
+# server restart honours the existing window (it's a UTC ISO timestamp).
+
+_PAIRING_WINDOW_KEY = "doorbell_pairing_until"
+DEFAULT_PAIRING_WINDOW_SECONDS = 300  # 5 minutes
+
+
+def open_pairing_window(seconds: int = DEFAULT_PAIRING_WINDOW_SECONDS) -> str:
+    """Open the doorbell pairing window for *seconds* from now.
+
+    Returns the ISO 8601 UTC expiry string actually written.  Any
+    previously-open window is overwritten — opening twice in a row just
+    extends the deadline.
+    """
+    if seconds <= 0:
+        raise ValueError("pairing window must be positive")
+    expires = (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat()
+    set_app_state(_PAIRING_WINDOW_KEY, expires)
+    return expires
+
+
+def close_pairing_window() -> None:
+    """Force-close the pairing window (admin 'cancel pairing' button)."""
+    set_app_state(_PAIRING_WINDOW_KEY, "")
+
+
+def pairing_window_expires_at() -> str | None:
+    """Return the current window's expiry ISO string, or None if closed."""
+    raw = get_app_state(_PAIRING_WINDOW_KEY)
+    return raw if raw else None
+
+
+def is_pairing_window_open() -> bool:
+    """True iff a pairing window has been opened and has not yet expired."""
+    raw = pairing_window_expires_at()
+    if not raw:
+        return False
+    try:
+        expires = datetime.fromisoformat(raw)
+    except (ValueError, TypeError):
+        return False
+    return datetime.now(timezone.utc) < expires
+
+
 # ── Visits ──────────────────────────────────────────────────────────────────
 
 def get_visits(
