@@ -80,6 +80,25 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     disabled     INTEGER NOT NULL DEFAULT 0
 );
 
+-- v0.1: doorbell device tokens.  A device is paired once via
+-- POST /api/doorbell/register during a 5-minute pairing window opened
+-- from the web UI; the resulting token is shown on-screen, copied into
+-- the Pi's /etc/openring/secrets.env, and used to Bearer-auth every
+-- subsequent press/heartbeat.  Distinct from api_tokens so devices
+-- don't inherit user-role gating and so revoking a device doesn't
+-- disturb a user account.
+CREATE TABLE IF NOT EXISTS device_tokens (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id       TEXT    NOT NULL UNIQUE,
+    label           TEXT    NOT NULL,
+    token_hash      TEXT    NOT NULL UNIQUE,
+    created_at      TEXT    NOT NULL,
+    last_seen_at    TEXT,
+    last_telemetry  TEXT,                  -- JSON payload from the most recent heartbeat
+    disabled        INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_device_tokens_seen ON device_tokens(last_seen_at);
+
 CREATE TABLE IF NOT EXISTS login_attempts (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     username     TEXT    NOT NULL,
@@ -487,6 +506,129 @@ def revoke_api_token(db: sqlite3.Connection, token_id: int) -> bool:
 def delete_api_token(db: sqlite3.Connection, token_id: int) -> None:
     db.execute("DELETE FROM api_tokens WHERE id=?", (token_id,))
     db.commit()
+
+
+# ── Doorbell device tokens (v0.1) ────────────────────────────────────────────
+
+
+def create_device_token(
+    db: sqlite3.Connection,
+    device_id: str,
+    label: str,
+) -> str:
+    """Pair a device: rotate-or-create a token row, return the raw token.
+
+    If *device_id* already has a row, this is treated as a re-pair (Pi
+    re-imaged, token rotated): the existing row's hash is overwritten and
+    last_seen_at is reset.  Otherwise a new row is inserted.  Either way
+    the raw token is returned to the caller — it MUST be shown to the
+    operator immediately and never persisted server-side except in
+    hashed form.
+    """
+    if not device_id.strip():
+        raise ValueError("device_id must not be empty")
+    if not label.strip():
+        raise ValueError("label must not be empty")
+    raw = secrets.token_urlsafe(32)
+    token_hash = _hash_token(raw)
+    now = _utcnow()
+    existing = db.execute(
+        "SELECT id FROM device_tokens WHERE device_id=?",
+        (device_id,),
+    ).fetchone()
+    if existing is None:
+        db.execute(
+            """INSERT INTO device_tokens
+               (device_id, label, token_hash, created_at)
+               VALUES (?,?,?,?)""",
+            (device_id, label, token_hash, now),
+        )
+    else:
+        db.execute(
+            """UPDATE device_tokens
+                  SET label=?, token_hash=?, created_at=?,
+                      last_seen_at=NULL, last_telemetry=NULL, disabled=0
+                WHERE device_id=?""",
+            (label, token_hash, now, device_id),
+        )
+    db.commit()
+    return raw
+
+
+def validate_device_token(
+    db: sqlite3.Connection,
+    raw_token: str,
+) -> dict[str, Any] | None:
+    """Look up a device by its Bearer token.  Returns ``{device_id, label}``
+    on success, ``None`` when the token is unknown, disabled, or empty.
+
+    Does NOT update ``last_seen_at`` — that's the heartbeat endpoint's
+    job (so a press doesn't pretend to be a heartbeat).
+    """
+    if not raw_token:
+        return None
+    token_hash = _hash_token(raw_token)
+    row = db.execute(
+        """SELECT id, device_id, label, last_seen_at
+             FROM device_tokens
+            WHERE token_hash=? AND disabled=0""",
+        (token_hash,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def touch_device(
+    db: sqlite3.Connection,
+    device_id: str,
+    telemetry_json: str | None = None,
+) -> None:
+    """Record that *device_id* just sent a heartbeat or press.
+
+    *telemetry_json* is the raw JSON string from a heartbeat body; pass
+    ``None`` for press events so we don't overwrite real telemetry with
+    a stale snapshot from a button mash.
+    """
+    now = _utcnow()
+    if telemetry_json is None:
+        db.execute(
+            "UPDATE device_tokens SET last_seen_at=? WHERE device_id=?",
+            (now, device_id),
+        )
+    else:
+        db.execute(
+            """UPDATE device_tokens
+                  SET last_seen_at=?, last_telemetry=?
+                WHERE device_id=?""",
+            (now, telemetry_json, device_id),
+        )
+    db.commit()
+
+
+def list_devices(db: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = db.execute(
+        """SELECT id, device_id, label, created_at, last_seen_at,
+                  last_telemetry, disabled
+             FROM device_tokens
+         ORDER BY id"""
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def delete_device(db: sqlite3.Connection, device_id: str) -> bool:
+    """Permanently remove a device's token.  Returns True iff a row was deleted."""
+    cur = db.execute("DELETE FROM device_tokens WHERE device_id=?", (device_id,))
+    db.commit()
+    return cur.rowcount > 0
+
+
+def disable_device(db: sqlite3.Connection, device_id: str) -> bool:
+    """Soft-revoke a device's token.  Returns True iff a row was updated."""
+    cur = db.execute(
+        "UPDATE device_tokens SET disabled=1 WHERE device_id=?",
+        (device_id,),
+    )
+    db.commit()
+    return cur.rowcount > 0
 
 
 # ── Rate limiting / lockout ──────────────────────────────────────────────────

@@ -23,6 +23,7 @@ from routes import (
     config,
     dashboard,
     deterrent,
+    doorbell,
     events,
     feedback,
     models,
@@ -311,7 +312,23 @@ def _migrate_base_url_to_domain() -> None:
 # ── Auth middleware ────────────────────────────────────────────────────────────
 
 # Paths that are always public (no login required).
-_PUBLIC_PREFIXES = ("/login", "/setup", "/static/", "/health", "/feedback")
+#
+# /api/doorbell/{register,press,heartbeat} are called by the doorbell
+# device.  They have their own auth model (Bearer device token for
+# press/heartbeat, pairing-window gating for register) so the user-auth
+# middleware must not 401 them just because the Bearer token isn't a
+# user-API token.  Admin endpoints under /api/doorbell/devices and
+# /api/doorbell/pair-window/* deliberately stay session-authenticated.
+_PUBLIC_PREFIXES = (
+    "/login",
+    "/setup",
+    "/static/",
+    "/health",
+    "/feedback",
+    "/api/doorbell/register",
+    "/api/doorbell/press",
+    "/api/doorbell/heartbeat",
+)
 
 
 def _is_public(path: str) -> bool:
@@ -496,6 +513,14 @@ async def csrf_middleware(request: Request, call_next):
         request.state.csrf_token = ""
         return await call_next(request)
 
+    # Skip CSRF for the doorbell pairing handshake — the device has no
+    # cookie and the endpoint is gated by the pairing window instead.
+    # press/heartbeat carry a Bearer token and are skipped by the
+    # generic Bearer check above.
+    if request.url.path == "/api/doorbell/register":
+        request.state.csrf_token = ""
+        return await call_next(request)
+
     # Ensure a CSRF cookie exists and is valid
     csrf_cookie = request.cookies.get(_CSRF_COOKIE)
     needs_cookie = not csrf_cookie or not _verify_csrf_token(csrf_cookie)
@@ -600,3 +625,4 @@ app.include_router(feedback.router)
 app.include_router(deterrent.router)
 app.include_router(actuations.router)
 app.include_router(backups.router)
+app.include_router(doorbell.router)
