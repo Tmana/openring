@@ -341,7 +341,10 @@ async def press(request: Request) -> Response:
 
         await client.publish(DOORBELL_CHANNEL, json.dumps(payload, default=str))
     finally:
-        await client.aclose()
+        # aclose() is the async-correct cleanup added in redis-py 5.0.1+.
+        # Runtime is fine on the pinned redis==7.4.0; the type-stub
+        # package (types-redis) lags and reports the method as missing.
+        await client.aclose()  # type: ignore[attr-defined, unused-ignore]
 
     logger.info(
         "Doorbell press: device=%s event_id=%d snapshot=%s actions=%s",
@@ -405,7 +408,7 @@ async def _grab_snapshot(
     finally:
         try:
             await pubsub.unsubscribe(result_channel)
-            await pubsub.aclose()
+            await pubsub.aclose()  # type: ignore[attr-defined, unused-ignore]
         except Exception:
             pass
 
