@@ -30,6 +30,7 @@ jobs:
             services/notifier/src \
             services/doorbell-firmware/src \
             services/clipper/src \
+            services/recognizer/src services/recognizer/tests \
             shared
 
   # ── Shellcheck (installers) ────────────────────────────────────────────
@@ -115,6 +116,12 @@ jobs:
         run: |
           mypy services/clipper/src shared \
             --ignore-missing-imports --explicit-package-bases
+      - name: mypy — recognizer
+        env:
+          MYPYPATH: services/recognizer/src:shared
+        run: |
+          mypy services/recognizer/src shared \
+            --ignore-missing-imports --explicit-package-bases
 
   # ── Tests — web ─────────────────────────────────────────────────────────
   test-web:
@@ -166,6 +173,26 @@ jobs:
         env:
           PYTHONPATH: services/clipper/src:shared
         run: pytest services/clipper/tests/ -v
+
+  # ── Tests — recognizer ──────────────────────────────────────────────────
+  # Recognizer's full stack needs face_recognition (dlib).  We install
+  # only the lightweight deps (numpy, redis, pyyaml, pillow) — the dlib
+  # smoke test is gated on `pytest.importorskip` so it skips cleanly.
+  test-recognizer:
+    name: Tests — recognizer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install deps (no dlib — smoke test importorskips)
+        run: pip install numpy redis pyyaml pillow pytest
+      - name: pytest
+        env:
+          PYTHONPATH: services/recognizer/src:shared
+        run: pytest services/recognizer/tests/ -v
 
   # ── Tests — doorbell-firmware ───────────────────────────────────────────
   test-doorbell-firmware:
