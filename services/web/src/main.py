@@ -64,6 +64,13 @@ async def _startup() -> None:
     global backup_manager
     auth_module.AUTH_DB_PATH = AUTH_DB_PATH
     auth_module.init_db(AUTH_DB_PATH)
+    # Bootstrap web-owned tables in openring.db.  Required for the
+    # doorbell pairing-window flow to work in any deployment where the
+    # detector isn't running first (smoke tests; deployments that point
+    # at an external camera service).  Idempotent — the detector also
+    # creates app_state via CREATE TABLE IF NOT EXISTS.
+    import db as web_db
+    web_db.init_db()
     _ensure_secret_key()
     _ensure_bootstrap_token()
     _check_db_integrity()
