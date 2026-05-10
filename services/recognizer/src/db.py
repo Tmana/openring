@@ -32,6 +32,19 @@ DB_PATH: str = os.environ.get("RECOGNIZER_DB_PATH", "/data/recognizer.db")
 _lock = threading.Lock()
 _local = threading.local()
 
+# Tracks every per-thread connection so close_all_connections can shut
+# them down at process exit.  ThreadPoolExecutor doesn't tear its
+# workers' threading.local storage down, so without this list the WAL
+# stays mmap-pinned until the kernel reaps the process.
+_all_connections: list[sqlite3.Connection] = []
+_connections_lock = threading.Lock()
+
+# 128 float32 == 512 bytes is the face_recognition (dlib) embedding size.
+# Anything else means a corrupted DB write or a model swap that didn't
+# re-embed; we refuse to load it rather than letting np.frombuffer +
+# np.vstack crash with a confusing "incompatible shape" later.
+_EXPECTED_EMBEDDING_BYTES = 512
+
 
 def _get_conn() -> sqlite3.Connection:
     conn = getattr(_local, "conn", None)
@@ -42,7 +55,25 @@ def _get_conn() -> sqlite3.Connection:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.row_factory = sqlite3.Row
         _local.conn = conn
+        with _connections_lock:
+            _all_connections.append(conn)
     return conn
+
+
+def close_all_connections() -> None:
+    """Close every per-thread sqlite connection ever opened in this process.
+
+    Registered via ``atexit`` from main.py so the WAL is flushed cleanly
+    on container SIGTERM.  Idempotent — connections that are already
+    closed silently skip.
+    """
+    with _connections_lock:
+        for conn in _all_connections:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        _all_connections.clear()
 
 
 def init_db() -> None:
@@ -106,14 +137,25 @@ def list_enabled_faces() -> list[dict]:
         out: list[dict] = []
         for f in faces:
             embs = conn.execute(
-                "SELECT embedding FROM face_embeddings WHERE face_id = ?",
+                "SELECT id, embedding FROM face_embeddings WHERE face_id = ?",
                 (f["id"],),
             ).fetchall()
+            valid: list[bytes] = []
+            for e in embs:
+                blob = bytes(e["embedding"])
+                if len(blob) != _EXPECTED_EMBEDDING_BYTES:
+                    logger.warning(
+                        "Skipping malformed embedding (face_id=%s, emb_id=%s): "
+                        "expected %d bytes, got %d",
+                        f["id"], e["id"], _EXPECTED_EMBEDDING_BYTES, len(blob),
+                    )
+                    continue
+                valid.append(blob)
             out.append({
                 "id": f["id"],
                 "label": f["label"],
                 "notes": f["notes"],
-                "embeddings": [bytes(e["embedding"]) for e in embs],
+                "embeddings": valid,
             })
         return out
 
