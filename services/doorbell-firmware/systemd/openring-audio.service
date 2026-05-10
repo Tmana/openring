@@ -1,0 +1,23 @@
+[Unit]
+Description=OpenRing audio relay (push-to-talk)
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/openring/secrets.env
+Environment=PYTHONPATH=/opt/openring/src:/opt/openring/shared
+WorkingDirectory=/opt/openring
+ExecStart=/usr/bin/python3 /opt/openring/src/audio_relay.py
+Restart=always
+RestartSec=3
+User=openring
+Group=openring
+SupplementaryGroups=audio
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

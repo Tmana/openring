@@ -30,6 +30,7 @@ jobs:
             services/notifier/src \
             services/doorbell-firmware/src \
             services/clipper/src \
+            services/audio-relay/src \
             shared
 
   # ── Shellcheck (installers) ────────────────────────────────────────────
@@ -90,7 +91,8 @@ jobs:
             -r services/web/requirements.txt \
             -r services/notifier/requirements.txt \
             -r services/doorbell-firmware/requirements.txt \
-            -r services/clipper/requirements.txt
+            -r services/clipper/requirements.txt \
+            -r services/audio-relay/requirements.txt
       - name: mypy — web
         env:
           MYPYPATH: services/web/src:shared
@@ -114,6 +116,12 @@ jobs:
           MYPYPATH: services/clipper/src:shared
         run: |
           mypy services/clipper/src shared \
+            --ignore-missing-imports --explicit-package-bases
+      - name: mypy — audio-relay
+        env:
+          MYPYPATH: services/audio-relay/src:shared
+        run: |
+          mypy services/audio-relay/src shared \
             --ignore-missing-imports --explicit-package-bases
 
   # ── Tests — web ─────────────────────────────────────────────────────────
@@ -166,6 +174,23 @@ jobs:
         env:
           PYTHONPATH: services/clipper/src:shared
         run: pytest services/clipper/tests/ -v
+
+  # ── Tests — audio-relay ─────────────────────────────────────────────────
+  test-audio-relay:
+    name: Tests — audio-relay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install deps
+        run: pip install -r services/audio-relay/requirements.txt pytest
+      - name: pytest
+        env:
+          PYTHONPATH: services/audio-relay/src:shared
+        run: pytest services/audio-relay/tests/ -v
 
   # ── Tests — doorbell-firmware ───────────────────────────────────────────
   test-doorbell-firmware:
