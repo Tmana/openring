@@ -179,10 +179,21 @@ calls anywhere.
 "watch the door from outside the house" guide that doesn't require
 trusting us.
 
-- [ ] **#27: Responsive CSS pass.** Dashboard, events, live view,
-  feedback flow all usable on a 390 px viewport.
-- [ ] **#28: Add-to-home-screen manifest.** PWA basics — name, icon,
-  start_url, display: standalone.
+- [x] **#27: Responsive CSS pass.** Dashboard, events, live view,
+  feedback flow usable on a 390 px viewport. Added `@media (max-width:
+  480px)` block that tightens chrome (main padding, card padding,
+  font sizes), gives tables horizontal scroll fallback, stacks
+  filter rows vertically, enforces 44 px tap targets, and hides
+  low-priority columns (Conf, Camera, inline Feedback) via
+  `.hide-narrow` — that info is still reachable via the snapshot
+  overlay on tap.
+- [x] **#28: Add-to-home-screen manifest.** `/static/manifest.json`
+  with name, short_name, scope, `display: standalone`,
+  `theme_color` matching the dark-mode chrome, plus
+  `apple-mobile-web-app-*` meta tags so iOS Safari treats
+  Add-to-Home-Screen as a real install. Icons use the existing
+  `favicon.ico` for now; full 192/512 PNG set is a v0.5 polish
+  follow-up.
 - [ ] **#29: Push notifications via Web Push.** Hooked into the
   notifier as a new channel type. Lets you skip ntfy if you want one
   fewer moving part.

@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}OpenRing{% endblock %}</title>
   <link rel="icon" href="/static/favicon.ico">
+  <link rel="apple-touch-icon" href="/static/favicon.ico">
+  <!-- v0.5 #28: PWA basics so an operator can add OpenRing to their
+       phone home-screen and launch it standalone (no browser chrome). -->
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#0f1117">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="OpenRing">
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js" defer></script>
   <script>

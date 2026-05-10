@@ -2,8 +2,8 @@
 <tr id="event-row-{{ e.id }}" class="{{ '' if e.feedback else 'event-unreviewed' }}">
   <td>{{ e.display_timestamp }}</td>
   <td>{{ e.class_name.replace("_", " ").title() }}</td>
-  <td>{{ "%.0f%%"|format(e.confidence * 100) }}</td>
-  <td>{{ e.camera_name }}</td>
+  <td class="hide-narrow">{{ "%.0f%%"|format(e.confidence * 100) }}</td>
+  <td class="hide-narrow">{{ e.camera_name }}</td>
   <td class="actions-cell">
     {% if e.actions_triggered %}
     {% for ch in e.actions_triggered %}<span class="tag">{{ ch }}</span>{% endfor %}
@@ -34,7 +34,7 @@
     </a>
     {% else %}&mdash;{% endif %}
   </td>
-  <td class="feedback-cell">
+  <td class="feedback-cell hide-narrow">
     {% if e.feedback == 'correct' %}
       <span class="badge badge-correct">Correct</span>
       <button class="btn-edit-feedback"
