@@ -168,3 +168,68 @@ class TestBboxParse:
     def test_no_bbox_field(self) -> None:
         import main
         assert main._bbox_from_event({}) is None
+
+
+class TestWrappedProcessReleasesBackpressure:
+    def test_release_on_success(self, fresh_db, snapshot_dir, monkeypatch) -> None:
+        import threading
+
+        import main
+        from recognizer import RecognitionResult
+        from settings import RecognizerSettings
+
+        token = _detection_event()["feedback_token"]
+        (snapshot_dir / f"{token}.jpg").write_bytes(b"\xff\xd8\xff\xe0")
+        monkeypatch.setattr(
+            main, "recognize_crop",
+            lambda *a, **kw: RecognitionResult(status="no_face"),
+        )
+
+        sem = threading.BoundedSemaphore(2)
+        sem.acquire()
+        s = RecognizerSettings(enabled=True, snapshots_dir=str(snapshot_dir))
+        evt = _detection_event()
+        main._wrapped_process(sem, s, evt, MagicMock(), None)
+        # If release didn't happen, the next acquire would block forever;
+        # we use the non-blocking variant to assert the slot came back.
+        assert sem.acquire(blocking=False) is True
+
+    def test_release_on_exception(self, fresh_db, snapshot_dir, monkeypatch) -> None:
+        import threading
+
+        import main
+
+        def kaboom(*args, **kwargs):
+            raise RuntimeError("inner blew up")
+        monkeypatch.setattr(main, "_process_event", kaboom)
+
+        sem = threading.BoundedSemaphore(1)
+        sem.acquire()
+        # The wrapper itself should re-raise; the slot release is
+        # the part we care about.
+        with pytest.raises(RuntimeError):
+            main._wrapped_process(sem)
+        assert sem.acquire(blocking=False) is True
+
+
+class TestCorruptEmbeddingSkipped:
+    """db.list_enabled_faces drops malformed embedding rows.
+
+    Protects the recognizer from a model-swap / corruption scenario
+    where an embedding column isn't 512 bytes; np.frombuffer would
+    otherwise produce a bad-shape array that crashes np.vstack.
+    """
+
+    def test_short_blob_skipped(self, fresh_db) -> None:
+        fid = fresh_db.insert_known_face("Sarah")
+        fresh_db.insert_embedding(fid, b"\x00" * 512, "ok.jpg")
+        fresh_db.insert_embedding(fid, b"\x00" * 100, "bad.jpg")
+        rows = fresh_db.list_enabled_faces()
+        assert len(rows) == 1
+        assert len(rows[0]["embeddings"]) == 1  # the bad one was filtered
+
+    def test_oversize_blob_skipped(self, fresh_db) -> None:
+        fid = fresh_db.insert_known_face("Bob")
+        fresh_db.insert_embedding(fid, b"\x00" * 1024, "bad.jpg")
+        rows = fresh_db.list_enabled_faces()
+        assert rows[0]["embeddings"] == []

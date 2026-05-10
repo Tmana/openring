@@ -365,8 +365,13 @@ care than CCTV footage.
 - We do not call any API. The matching runs in the recognizer
   container. There is no "cloud face match" feature flag, even off-by-
   default. See the Charter in `CLAUDE.md`.
-- We do not include face labels in any telemetry, because we do not
-  collect telemetry of any kind.
+- We do not collect telemetry of any kind, so face labels do not
+  appear in any aggregate we send. Labels do appear on the *internal*
+  Redis bus (`openring:recognition` payloads) and in the recognizer
+  container's *DEBUG* log lines — both stay on the host. Operators
+  who pipe container logs to a remote log aggregator should be aware
+  that DEBUG-level logs include face labels; INFO and above only
+  reference the opaque `face_id` integer.
 - We do not write face labels into webhook payloads *unless* the user's
   configured channel is the destination — i.e. webhooks dispatched on
   behalf of a matched face carry the label, but we never sneak labels

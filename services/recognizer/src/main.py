@@ -18,6 +18,7 @@ openring.yml — when disabled the service idles and does no work.
 
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
@@ -54,6 +55,15 @@ RECOGNITION_CHANNEL = "openring:recognition"
 
 _REDIS_RECONNECT_DELAY = 5
 _REDIS_MAX_RECONNECT_DELAY = 60
+
+# Bounded queue depth for the worker pool. The stdlib ThreadPoolExecutor
+# uses an unbounded SimpleQueue internally, so under sustained detector
+# pressure tasks would back up unboundedly and memory would creep. We
+# guard submission with a BoundedSemaphore — the active+queued count
+# can never exceed (max_workers + _BACKPRESSURE_QUEUE_DEPTH). When the
+# semaphore can't be acquired non-blocking we drop the event with a
+# log line; better to lose a recognition than to OOM the container.
+_BACKPRESSURE_QUEUE_DEPTH = 16
 
 
 def load_config() -> dict:
@@ -208,11 +218,16 @@ def _process_event(
         },
     )
 
+    # Labels are PII per docs/FACE_RECOGNITION.md §5.  Operators piping
+    # container logs to a remote aggregator wouldn't expect "Sarah" to
+    # show up there.  INFO-level says "we matched something" with the
+    # face_id (an opaque integer); the label is at DEBUG only.
     if result.status == "matched":
         logger.info(
-            "Matched %s as %s (score=%.3f) for token=%s",
-            camera, result.label, result.score or 0.0, feedback_token,
+            "Matched face on %s (face_id=%s, score=%.3f, token=%s)",
+            camera, result.face_id, result.score or 0.0, feedback_token,
         )
+        logger.debug("Match label was %s for token %s", result.label, feedback_token)
     else:
         logger.debug(
             "Recognition status=%s for token=%s (camera=%s)",
@@ -220,10 +235,30 @@ def _process_event(
         )
 
 
+def _wrapped_process(
+    backpressure: threading.BoundedSemaphore,
+    *args: object,
+    **kwargs: object,
+) -> None:
+    """Pool entry point — releases the backpressure slot when the worker
+    finishes (success or exception).  Without this, a slot is held forever
+    when ``_process_event`` raises and the queue silently fills up."""
+    try:
+        _process_event(*args, **kwargs)  # type: ignore[arg-type]
+    finally:
+        try:
+            backpressure.release()
+        except ValueError:
+            # Defensive — releasing a never-acquired semaphore is a bug,
+            # but log+swallow so a misuse doesn't crash the worker.
+            logger.exception("backpressure semaphore release failed")
+
+
 def subscribe_loop(
     redis_cfg: dict,
     settings_ref: AtomicRef[RecognizerSettings],
     pool: ThreadPoolExecutor,
+    backpressure: threading.BoundedSemaphore,
     shutdown_event: threading.Event,
 ) -> None:
     """Listen for detection events, dispatch each into the worker pool.
@@ -231,9 +266,16 @@ def subscribe_loop(
     Reconnect-with-backoff structure mirrors clipper/notifier — same
     handful of edge cases (transient Redis flap, malformed JSON,
     invalid HMAC) handled the same way for consistency.
+
+    Subscribe and publish use *separate* Redis clients.  Sharing a single
+    client works in practice today because redis-py's ``Redis.publish``
+    grabs a fresh connection from the pool, but the subscribe connection
+    is parked in pub/sub state — a future redis-py version that tightens
+    that contract would silently break us.  Two clients, no surprises.
     """
     host = redis_cfg.get("host", "redis")
     port = int(redis_cfg.get("port", 6379))
+    redis_password = os.environ.get("REDIS_PASSWORD", "") or None
     hmac_key = load_key_from_env()
     if hmac_key is None:
         logger.warning("DETECTION_HMAC_KEY not set — accepting unsigned events")
@@ -241,17 +283,24 @@ def subscribe_loop(
     delay = _REDIS_RECONNECT_DELAY
     invalid_warned = False
     unsigned_warned = False
+    drop_warned = False
 
     while not shutdown_event.is_set():
-        client: redis_lib.Redis | None = None
+        sub_client: redis_lib.Redis | None = None
+        pub_client: redis_lib.Redis | None = None
         pubsub: redis_lib.client.PubSub | None = None
         try:
-            client = redis_lib.Redis(
+            sub_client = redis_lib.Redis(
                 host=host, port=port,
-                password=os.environ.get("REDIS_PASSWORD", "") or None,
+                password=redis_password,
                 decode_responses=True,
             )
-            pubsub = client.pubsub()
+            pub_client = redis_lib.Redis(
+                host=host, port=port,
+                password=redis_password,
+                decode_responses=True,
+            )
+            pubsub = sub_client.pubsub()
             pubsub.subscribe(DETECTION_CHANNEL)
             logger.info("Subscribed to %s", DETECTION_CHANNEL)
             delay = _REDIS_RECONNECT_DELAY
@@ -296,9 +345,32 @@ def subscribe_loop(
                 ):
                     continue
 
+                # Bounded backpressure: non-blocking acquire so a slow
+                # face-recognition pass cannot stall the subscribe loop
+                # when the detector is firing fast.  Drop+warn if the
+                # active+queued worker count is already at the cap.
+                if not backpressure.acquire(blocking=False):
+                    if not drop_warned:
+                        logger.warning(
+                            "dropped_for_backpressure — recognizer queue full "
+                            "(workers + queue depth = %d). Further at DEBUG.",
+                            _BACKPRESSURE_QUEUE_DEPTH + settings.max_concurrent_workers,
+                        )
+                        drop_warned = True
+                    else:
+                        logger.debug(
+                            "dropped_for_backpressure token=%s",
+                            event.get("feedback_token"),
+                        )
+                    continue
+
                 try:
-                    pool.submit(_process_event, settings, event, client, hmac_key)
+                    pool.submit(
+                        _wrapped_process,
+                        backpressure, settings, event, pub_client, hmac_key,
+                    )
                 except RuntimeError:
+                    backpressure.release()
                     break
 
         except redis_lib.RedisError:
@@ -314,11 +386,12 @@ def subscribe_loop(
                     pubsub.close()
                 except Exception:
                     pass
-            if client is not None:
-                try:
-                    client.close()
-                except Exception:
-                    pass
+            for c in (sub_client, pub_client):
+                if c is not None:
+                    try:
+                        c.close()
+                    except Exception:
+                        pass
 
     logger.info("Subscription loop exited")
 
@@ -338,6 +411,15 @@ def main() -> None:
         max_workers=max(1, settings.max_concurrent_workers),
         thread_name_prefix="recognizer-worker",
     )
+    backpressure = threading.BoundedSemaphore(
+        max(1, settings.max_concurrent_workers) + _BACKPRESSURE_QUEUE_DEPTH,
+    )
+
+    # Worker threads keep a per-thread sqlite connection on threading.local
+    # (db.py:_local).  ThreadPoolExecutor doesn't unwind those at shutdown,
+    # so we register an atexit hook to close the WAL cleanly when the
+    # process exits.  Container SIGTERM → main() returns → atexit fires.
+    atexit.register(recognizer_db.close_all_connections)
 
     shutdown_event = threading.Event()
 
@@ -361,7 +443,7 @@ def main() -> None:
 
     subscribe_loop(
         cfg.get("redis", {}),
-        settings_ref, pool, shutdown_event,
+        settings_ref, pool, backpressure, shutdown_event,
     )
 
     watcher.stop()
