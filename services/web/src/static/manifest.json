@@ -1,0 +1,19 @@
+{
+  "name": "OpenRing",
+  "short_name": "OpenRing",
+  "description": "Local-only smart doorbell. Person detection on your host, no cloud.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f1117",
+  "theme_color": "#0f1117",
+  "icons": [
+    {
+      "src": "/static/favicon.ico",
+      "sizes": "32x32 64x64",
+      "type": "image/x-icon"
+    }
+  ],
+  "lang": "en-US"
+}
