@@ -168,16 +168,37 @@ fi
 # ── Step 8: the actual press flow ────────────────────────────────────
 
 step "Opening pairing window"
-PAIR_RESPONSE=$(docker compose exec -T web python3 -c "
-import urllib.request, json
-req = urllib.request.Request('http://localhost:8080/api/doorbell/pair-window/open', method='POST', data=b'')
+PAIR_RESPONSE=$(docker compose exec -T web python3 <<'PY'
+# CSRF middleware (services/web/src/main.py:csrf_middleware) requires a
+# matching token cookie + header on mutating requests.  Even though
+# auth.enabled=false grants every caller admin role, CSRF still applies.
+# We do the standard double-submit dance: GET / to seed the cookie,
+# then POST with X-CSRF-Token mirroring the cookie value.
+import http.cookiejar, urllib.request
+
+jar = http.cookiejar.CookieJar()
+opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+# Seed the csrf_token cookie.
+opener.open('http://localhost:8080/', timeout=5).read()
+csrf = next((c.value for c in jar if c.name == 'csrf_token'), '')
+if not csrf:
+    raise SystemExit('no csrf_token cookie issued by GET /')
+
+req = urllib.request.Request(
+    'http://localhost:8080/api/doorbell/pair-window/open',
+    method='POST',
+    headers={'X-CSRF-Token': csrf},
+    data=b'',
+)
 try:
-    resp = urllib.request.urlopen(req, timeout=5)
+    resp = opener.open(req, timeout=5)
     print(resp.read().decode())
 except urllib.error.HTTPError as e:
     print('HTTP', e.code, e.read().decode())
     raise
-")
+PY
+)
 echo "${PAIR_RESPONSE}" | grep -q expires_at || fail "pair-window/open didn't return expires_at: ${PAIR_RESPONSE}"
 ok "pairing window opened"
 
