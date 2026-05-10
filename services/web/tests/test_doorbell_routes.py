@@ -27,9 +27,44 @@ def fresh_auth_db():
     ``auth_module.AUTH_DB_PATH`` after import is a no-op for
     ``get_db(db_path=AUTH_DB_PATH)``.  Instead we use the conftest path
     everywhere and wipe rows between tests so isolation is preserved.
+
+    Issue #20: this fixture used to init the DB once and let the route
+    handler hit the same file via ``auth_module.get_db(AUTH_DB_PATH)``.
+    On Linux CI the route's connection saw "no such table:
+    device_tokens" even though the fixture had just CREATE'd it,
+    surfacing as 12 failing tests in this file.  The defence:
+    sanity-check the schema after init_db, and assert AUTH_DB_PATH
+    captured by every route module agrees with the fixture's path.
+    Failing fast here gives CI a useful error instead of a deep
+    traceback inside ``create_device_token``.
     """
+    import sqlite3 as _sqlite
     path = os.environ["AUTH_DB_PATH"]
     auth_module.init_db(path)
+
+    # Confirm device_tokens actually exists at the path the route will use.
+    # auth_module.AUTH_DB_PATH is the function-default-arg used by get_db
+    # when called without args; the route uses doorbell.AUTH_DB_PATH which
+    # was captured at routes.doorbell import time.  Both should resolve to
+    # the same string, but assert it.
+    from routes import doorbell as _doorbell_route
+    assert path == auth_module.AUTH_DB_PATH == _doorbell_route.AUTH_DB_PATH, (
+        f"AUTH_DB_PATH mismatch: env={path!r}, "
+        f"auth_module={auth_module.AUTH_DB_PATH!r}, "
+        f"doorbell={_doorbell_route.AUTH_DB_PATH!r}"
+    )
+    sanity = _sqlite.connect(path)
+    try:
+        names = {r[0] for r in sanity.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+    finally:
+        sanity.close()
+    assert "device_tokens" in names, (
+        f"init_db ran on {path!r} but device_tokens is missing.  "
+        f"Tables present: {sorted(names)}"
+    )
+
     db = auth_module.get_db()
     try:
         # Wipe state from previous tests — devices first (no FK), then sessions/tokens.
