@@ -32,6 +32,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 import db as recognizer_db
+import enrollment
 import redis as redis_lib
 import yaml
 from atomic_ref import AtomicRef
@@ -51,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 CONFIG_PATH = os.environ.get("CONFIG_PATH", "/config/openring.yml")
 DETECTION_CHANNEL = "openring:detections"
+ENROLLMENT_CHANNEL = "openring:enrollment"
 RECOGNITION_CHANNEL = "openring:recognition"
 
 _REDIS_RECONNECT_DELAY = 5
@@ -235,6 +237,43 @@ def _process_event(
         )
 
 
+_ENROLL_PHOTO_PATH_RE = re.compile(r"^/data/face-references/\d+/[^/]+\.(jpg|jpeg|png)$")
+
+
+def _handle_enrollment(event: dict, settings: RecognizerSettings) -> None:
+    """Process one ``openring:enrollment`` payload.
+
+    Validates the photo path against a strict regex before ever touching
+    the filesystem — HMAC stops external injection but a bug or compromised
+    web service publishing a signed payload with a slash-laden photo_path
+    would otherwise let the recognizer read arbitrary files.
+    """
+    try:
+        face_id = int(event.get("face_id", -1))
+    except (TypeError, ValueError):
+        face_id = -1
+    photo_path = str(event.get("photo_path", ""))
+    if face_id <= 0 or not photo_path:
+        logger.warning("Malformed enrollment event dropped: %s", event)
+        return
+    # Lock the photo path to /data/face-references/<int>/<filename>.{jpg|png}.
+    # The web side writes there; the recognizer reads only there.
+    if not _ENROLL_PHOTO_PATH_RE.match(photo_path):
+        logger.error(
+            "Refusing enrollment — photo_path %r is outside the allowed prefix",
+            photo_path,
+        )
+        return
+    # Belt-and-braces: the photo MUST live under references_dir as configured.
+    if not photo_path.startswith(settings.references_dir.rstrip("/") + "/"):
+        logger.error(
+            "Refusing enrollment — photo_path %r doesn't start with %s",
+            photo_path, settings.references_dir,
+        )
+        return
+    enrollment.embed_one(face_id, photo_path)
+
+
 def _wrapped_process(
     backpressure: threading.BoundedSemaphore,
     *args: object,
@@ -301,8 +340,8 @@ def subscribe_loop(
                 decode_responses=True,
             )
             pubsub = sub_client.pubsub()
-            pubsub.subscribe(DETECTION_CHANNEL)
-            logger.info("Subscribed to %s", DETECTION_CHANNEL)
+            pubsub.subscribe(DETECTION_CHANNEL, ENROLLMENT_CHANNEL)
+            logger.info("Subscribed to %s + %s", DETECTION_CHANNEL, ENROLLMENT_CHANNEL)
             delay = _REDIS_RECONNECT_DELAY
             pathlib.Path("/tmp/healthy").touch(exist_ok=True)
 
@@ -335,6 +374,15 @@ def subscribe_loop(
                         "Accepting unsigned %s event. Further at DEBUG.",
                         message["channel"],
                     )
+
+                # Enrollment channel: web service asking us to embed a
+                # newly-uploaded reference photo.  Always serviced — it's
+                # not gated by face_recognition.enabled because an
+                # operator who just enabled the feature would expect
+                # already-uploaded photos to be embedded on first run.
+                if message["channel"] == ENROLLMENT_CHANNEL:
+                    _handle_enrollment(event, settings_ref.get())
+                    continue
 
                 settings = settings_ref.get()
                 if not settings.enabled:
@@ -406,6 +454,15 @@ def main() -> None:
 
     settings = from_yaml(cfg)
     settings_ref: AtomicRef[RecognizerSettings] = AtomicRef(settings)
+
+    # Catch up on any photos the web service uploaded while we were down.
+    # Best-effort: if dlib isn't available (e.g. in a stripped image) we
+    # log and continue rather than crash — the subscribe loop will still
+    # service runtime detection events.
+    try:
+        enrollment.sweep(settings)
+    except Exception:
+        logger.exception("Startup enrollment sweep failed; continuing")
 
     pool = ThreadPoolExecutor(
         max_workers=max(1, settings.max_concurrent_workers),

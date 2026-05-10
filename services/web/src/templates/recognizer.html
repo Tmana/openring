@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Faces — OpenRing{% endblock %}
+{% block content %}
+<h1>Face Recognition</h1>
+
+{% if msg %}<div class="banner banner--ok">{{ msg }}</div>{% endif %}
+{% if error %}<div class="banner banner--err">{{ error }}</div>{% endif %}
+
+<div class="hint">
+  <p>
+    Enroll faces here to let OpenRing label notifications and (with rules
+    in <code>face_recognition.rules</code>) suppress or escalate alerts
+    per person.
+  </p>
+  <p>
+    <strong>Privacy note:</strong> these photos and the embeddings derived
+    from them are stored in <code>/data/face-references/</code> and
+    <code>/data/recognizer.db</code>. They will be included in any backup
+    of that directory. Reference photos and embeddings never leave this
+    host. See <code>docs/FACE_RECOGNITION.md</code>.
+  </p>
+  <p>
+    <strong>Consent:</strong> if you enroll someone other than yourself,
+    tell them. Delete their photos if they ask you to.
+  </p>
+</div>
+
+<h2>Add a face</h2>
+<form method="post" action="/admin/recognizer" enctype="multipart/form-data" class="card">
+  <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+  <div class="filter-row">
+    <label>
+      Label
+      <input type="text" name="label" required maxlength="64" placeholder="e.g. Sarah">
+    </label>
+    <label style="flex:1;">
+      Notes (optional)
+      <input type="text" name="notes" maxlength="200" placeholder="wears glasses, has been Mom since the 90s">
+    </label>
+  </div>
+  <div class="filter-row" style="margin-top:0.5em;">
+    <label style="flex:1;">
+      Reference photos (3–5 recommended; varied angle/lighting; one face per photo)
+      <input type="file" name="photos" accept="image/jpeg,image/png" multiple>
+    </label>
+    <button type="submit">Enroll</button>
+  </div>
+</form>
+
+<h2>Enrolled faces ({{ faces|length }})</h2>
+
+{% if not faces %}
+<p class="muted">No faces enrolled yet. Add one above.</p>
+{% endif %}
+
+{% for face in faces %}
+<section class="card" id="face-{{ face.id }}" style="margin-top:1em;">
+  <header class="filter-row" style="align-items:baseline;">
+    <h3 style="margin:0;flex:1;">
+      {{ face.label }}
+      {% if not face.enabled %}<span class="role-badge role-badge--viewer" title="Soft-deleted: photos kept, recognition disabled">DISABLED</span>{% endif %}
+    </h3>
+    <span class="muted">
+      {{ face.photos|length }} photo{{ '' if face.photos|length == 1 else 's' }} ·
+      {{ face.embedding_count }} embedding{{ '' if face.embedding_count == 1 else 's' }}
+      {% if face.embedding_count < face.photos|length %}
+        <em title="The recognizer is still embedding the most recent uploads.">(embedding…)</em>
+      {% endif %}
+    </span>
+  </header>
+
+  {% if face.notes %}<p class="muted" style="margin-top:0;">{{ face.notes }}</p>{% endif %}
+
+  <div class="filter-row" style="flex-wrap:wrap;gap:0.5em;margin-top:0.5em;">
+    {% for photo in face.photos %}
+    <img src="/admin/recognizer/{{ face.id }}/photo/{{ photo }}"
+         alt="{{ face.label }} reference {{ loop.index }}"
+         style="width:96px;height:96px;object-fit:cover;border-radius:4px;border:1px solid var(--border);">
+    {% endfor %}
+  </div>
+
+  <details style="margin-top:0.75em;">
+    <summary>Edit / add photos / delete</summary>
+
+    <form method="post" action="/admin/recognizer/{{ face.id }}/edit" class="filter-row" style="margin-top:0.5em;">
+      <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+      <label>
+        Label
+        <input type="text" name="label" value="{{ face.label }}" required maxlength="64">
+      </label>
+      <label style="flex:1;">
+        Notes
+        <input type="text" name="notes" value="{{ face.notes }}" maxlength="200">
+      </label>
+      <label style="display:flex;align-items:center;gap:0.5em;">
+        <input type="checkbox" name="enabled" value="on" {% if face.enabled %}checked{% endif %}>
+        Recognition enabled
+      </label>
+      <button type="submit">Save</button>
+    </form>
+
+    <form method="post" action="/admin/recognizer/{{ face.id }}/photos"
+          enctype="multipart/form-data" class="filter-row" style="margin-top:0.5em;">
+      <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+      <label style="flex:1;">
+        Add more photos
+        <input type="file" name="photos" accept="image/jpeg,image/png" multiple>
+      </label>
+      <button type="submit">Upload</button>
+    </form>
+
+    <form method="post" action="/admin/recognizer/{{ face.id }}/delete"
+          style="margin-top:0.75em;"
+          onsubmit="return confirm('Permanently delete {{ face.label|e }}? This removes the photos and the embeddings — this is NOT recoverable. To temporarily disable recognition without losing the data, untick the “Recognition enabled” box instead.');">
+      <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+      <button type="submit" class="btn-danger">Delete face permanently</button>
+    </form>
+  </details>
+</section>
+{% endfor %}
+{% endblock %}

@@ -149,8 +149,14 @@ calls anywhere.
   `/data/recognizer.db` SQLite file. Publishes outcomes on
   `openring:recognition` (HMAC-signed). Off by default. Design doc:
   `docs/FACE_RECOGNITION.md`.
-- [ ] **#24: Known-face enrollment UI.** Web page where the user
-  uploads 3-5 photos per person, gives them a label.
+- [x] **#24: Known-face enrollment UI.** Admin-only `/admin/recognizer`
+  page lets the operator add a face (label + notes), upload 3-5
+  reference photos, soft-delete (toggle enabled), or hard-delete the
+  face entirely (cascades to embeddings + on-disk photos). Web saves
+  photos + a `known_faces` row; the recognizer subscribes to
+  `openring:enrollment` and computes embeddings on the sidecar so
+  dlib stays out of the web image. A startup catch-up sweep makes the
+  flow tolerant to a recognizer restart mid-enrollment.
 - [ ] **#25: Notification template extension.** The notifier learns
   to render "Sarah is at the front door" when a match clears the
   similarity threshold; falls back to "Person at the front door"
