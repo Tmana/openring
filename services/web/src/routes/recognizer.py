@@ -58,6 +58,10 @@ templates = Jinja2Templates(directory=os.path.join(_src, "templates"))
 # 12 MP cellphone JPEG through with headroom; bigger is almost always
 # a misconfigured camera shot saved as PNG.
 _MAX_PHOTO_BYTES = 10 * 1024 * 1024
+# Chunk size for the streaming bound check.  64 KB is small enough that
+# overrun is detected within a hundred ms of malicious upload start, big
+# enough that loop overhead is negligible for the legitimate <10 MB case.
+_UPLOAD_CHUNK_BYTES = 64 * 1024
 
 # Accepted MIME types — we sniff the first few bytes for magic numbers
 # rather than trusting Content-Type.  JPEG and PNG only; HEIC/WEBP/etc
@@ -153,15 +157,30 @@ async def _save_photo(face_id: int, upload: UploadFile) -> tuple[str | None, str
     relative path under REFERENCES_DIR and ``error`` is None.  On
     rejection ``saved_path`` is None and ``error`` is a human-readable
     reason.
+
+    Reads in chunks against a running counter so a multi-GB body can't
+    fully buffer through Starlette's spooled-temp-file before the size
+    cap fires.  We bail the moment the cap is exceeded and the partially-
+    read upload is discarded — Starlette handles client-disconnect
+    cleanly even when the body is much larger than what we accepted.
     """
     if not upload.filename:
         return None, "missing filename"
 
-    raw = await upload.read()
-    if len(raw) == 0:
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(_UPLOAD_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > _MAX_PHOTO_BYTES:
+            return None, f"photo too large (max {_MAX_PHOTO_BYTES // (1024*1024)} MB)"
+        chunks.append(chunk)
+
+    if total == 0:
         return None, "empty upload"
-    if len(raw) > _MAX_PHOTO_BYTES:
-        return None, f"photo too large (max {_MAX_PHOTO_BYTES // (1024*1024)} MB)"
+    raw = b"".join(chunks)
 
     if raw[:3] == _JPEG_MAGIC:
         ext = ".jpg"

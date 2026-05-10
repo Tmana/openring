@@ -237,16 +237,18 @@ def _process_event(
         )
 
 
-_ENROLL_PHOTO_PATH_RE = re.compile(r"^/data/face-references/\d+/[^/]+\.(jpg|jpeg|png)$")
+_ALLOWED_PHOTO_SUFFIXES = (".jpg", ".jpeg", ".png")
 
 
 def _handle_enrollment(event: dict, settings: RecognizerSettings) -> None:
     """Process one ``openring:enrollment`` payload.
 
-    Validates the photo path against a strict regex before ever touching
-    the filesystem — HMAC stops external injection but a bug or compromised
-    web service publishing a signed payload with a slash-laden photo_path
-    would otherwise let the recognizer read arbitrary files.
+    Validates the photo path with ``Path.resolve()`` containment against
+    the configured references_dir.  HMAC stops external injection but a
+    bug or compromised web service publishing a signed payload with a
+    slash-laden photo_path would otherwise let the recognizer read
+    arbitrary files.  Symlink-safe via resolve(); the resolved-path
+    containment check rejects ``..`` and any symlink that escapes.
     """
     try:
         face_id = int(event.get("face_id", -1))
@@ -256,21 +258,27 @@ def _handle_enrollment(event: dict, settings: RecognizerSettings) -> None:
     if face_id <= 0 or not photo_path:
         logger.warning("Malformed enrollment event dropped: %s", event)
         return
-    # Lock the photo path to /data/face-references/<int>/<filename>.{jpg|png}.
-    # The web side writes there; the recognizer reads only there.
-    if not _ENROLL_PHOTO_PATH_RE.match(photo_path):
+
+    suffix = pathlib.Path(photo_path).suffix.lower()
+    if suffix not in _ALLOWED_PHOTO_SUFFIXES:
+        logger.error("Refusing enrollment — unsupported extension %r", photo_path)
+        return
+
+    try:
+        target = pathlib.Path(photo_path).resolve(strict=False)
+        root = pathlib.Path(settings.references_dir).resolve(strict=False)
+    except (OSError, RuntimeError):
+        logger.error("Refusing enrollment — could not resolve %r", photo_path)
+        return
+    try:
+        target.relative_to(root)
+    except ValueError:
         logger.error(
-            "Refusing enrollment — photo_path %r is outside the allowed prefix",
-            photo_path,
+            "Refusing enrollment — photo_path %r resolves outside references_dir %r",
+            photo_path, str(root),
         )
         return
-    # Belt-and-braces: the photo MUST live under references_dir as configured.
-    if not photo_path.startswith(settings.references_dir.rstrip("/") + "/"):
-        logger.error(
-            "Refusing enrollment — photo_path %r doesn't start with %s",
-            photo_path, settings.references_dir,
-        )
-        return
+
     enrollment.embed_one(face_id, photo_path)
 
 

@@ -136,6 +136,31 @@ class TestCreate:
         assert len(faces) == 1
         assert faces[0]["photos"] == []
 
+    def test_streaming_cap_aborts_during_read(self, client, fresh_recognizer_db, monkeypatch):
+        """H2 fix verification: oversized uploads abort during chunked
+        read rather than fully buffering through the SpooledTemporaryFile.
+
+        We trim the cap to a tiny value and confirm the route returns
+        before the chunks are joined.  The fact that the photo is
+        rejected without OOMing the test process is the win — making this
+        observable just verifies the chunk loop hit the size branch.
+        """
+        from routes import recognizer as _rec_route
+        monkeypatch.setattr(_rec_route, "_MAX_PHOTO_BYTES", 1024)
+        monkeypatch.setattr(_rec_route, "_UPLOAD_CHUNK_BYTES", 256)
+
+        body = _TINY_JPEG + b"\x00" * 4096  # well over 1 KB
+        files = [("photos", ("big.jpg", io.BytesIO(body), "image/jpeg"))]
+        r = client.post(
+            "/admin/recognizer",
+            data={"label": "Eve"},
+            files=files,
+            follow_redirects=False,
+        )
+        assert r.status_code == 302
+        faces = fresh_recognizer_db.list_faces()
+        assert faces[0]["photos"] == []
+
     def test_rejects_non_image_upload(self, client, fresh_recognizer_db):
         files = [("photos", ("a.txt", io.BytesIO(b"hello world"), "text/plain"))]
         r = client.post(

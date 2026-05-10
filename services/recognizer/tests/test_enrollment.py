@@ -176,9 +176,18 @@ class TestEnrollmentMessageGate:
         )
         assert called["n"] == 0
 
-    def test_accepts_valid_path(self, fresh_db, monkeypatch):
+    def test_accepts_valid_path(self, tmp_path, fresh_db, monkeypatch):
         import main
         from settings import RecognizerSettings
+
+        # The resolve()-based containment check requires the path to
+        # actually resolve, so use tmp_path so the test works on any host.
+        refs = tmp_path / "face-references"
+        refs.mkdir()
+        face_dir = refs / "7"
+        face_dir.mkdir()
+        photo = face_dir / "1.jpg"
+        photo.write_bytes(b"fake")
 
         called = {"args": None}
 
@@ -186,8 +195,51 @@ class TestEnrollmentMessageGate:
             called["args"] = (face_id, photo_path)
         monkeypatch.setattr("enrollment.embed_one", fake)
 
+        s = RecognizerSettings(references_dir=str(refs))
+        main._handle_enrollment(
+            {"face_id": 7, "photo_path": str(photo)}, s,
+        )
+        assert called["args"] == (7, str(photo))
+
+    def test_rejects_unsupported_extension(self, fresh_db, monkeypatch):
+        import main
+        from settings import RecognizerSettings
+
+        called = {"n": 0}
+        monkeypatch.setattr(
+            "enrollment.embed_one",
+            lambda *a, **kw: called.update(n=called["n"] + 1),
+        )
         s = RecognizerSettings(references_dir="/data/face-references")
         main._handle_enrollment(
-            {"face_id": 7, "photo_path": "/data/face-references/7/1.jpg"}, s,
+            {"face_id": 1, "photo_path": "/data/face-references/1/1.exe"}, s,
         )
-        assert called["args"] == (7, "/data/face-references/7/1.jpg")
+        assert called["n"] == 0
+
+    def test_honours_overridden_references_dir(self, tmp_path, fresh_db, monkeypatch):
+        """H1 fix verification: a non-default references_dir must work.
+
+        Before the resolve()-based check, a regex hardcoded
+        ``/data/face-references`` so any operator with an overridden
+        path was silently rejected.
+        """
+        import main
+        from settings import RecognizerSettings
+
+        custom = tmp_path / "custom-refs"
+        custom.mkdir()
+        face_dir = custom / "3"
+        face_dir.mkdir()
+        photo = face_dir / "x.jpg"
+        photo.write_bytes(b"fake")
+
+        called = {"args": None}
+        monkeypatch.setattr(
+            "enrollment.embed_one",
+            lambda fid, p: called.update(args=(fid, p)),
+        )
+        s = RecognizerSettings(references_dir=str(custom))
+        main._handle_enrollment(
+            {"face_id": 3, "photo_path": str(photo)}, s,
+        )
+        assert called["args"] == (3, str(photo))
