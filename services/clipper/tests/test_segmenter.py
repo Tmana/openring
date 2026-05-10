@@ -81,6 +81,27 @@ class TestFFmpegCommand:
         assert int(cmd[wrap_idx]) == seg._segments_per_camera
 
 
+class TestBackoffReset:
+    """Supervisor backoff is supposed to reset when the previous run
+    was stable (>= _STABLE_RUN_SECONDS).  Confirm the public surface
+    of `_launch` returns a duration the supervisor can use."""
+
+    def test_launch_returns_zero_when_ffmpeg_missing(self, seg, monkeypatch):
+        # No ffmpeg on PATH → _launch returns 0.0 without spawning.
+        monkeypatch.setattr("segmenter.shutil.which", lambda _: None)
+        seg._stop.set()  # so the 10s wait inside short-circuits
+        ran_for = seg._launch()
+        assert ran_for == 0.0
+
+    def test_supervisor_constants_in_range(self, seg):
+        # Tiny smoke test: the constants the supervisor uses for the
+        # backoff math are sensible.  Catches a typo that would leave
+        # us forever-bouncing or never backing off.
+        assert seg._BACKOFF_INITIAL > 0
+        assert seg._BACKOFF_MAX >= seg._BACKOFF_INITIAL
+        assert seg._STABLE_RUN_SECONDS > seg._BACKOFF_INITIAL
+
+
 class TestRestrictRingSize:
     def test_no_op_when_under_limit(self, tmp_path) -> None:
         cam = tmp_path / "cam"

@@ -116,26 +116,43 @@ class CameraSegmenter:
     # Internal
     # ------------------------------------------------------------------
 
+    _STABLE_RUN_SECONDS = 30.0
+    _BACKOFF_INITIAL = 2.0
+    _BACKOFF_MAX = 30.0
+
     def _run_supervisor(self) -> None:
-        """Restart ffmpeg with backoff until stop is requested."""
-        delay = 2.0
+        """Restart ffmpeg with backoff until stop is requested.
+
+        A "stable run" — one that lasted at least
+        ``_STABLE_RUN_SECONDS`` — resets the backoff so we recover
+        quickly after a single transient ffmpeg crash.  Without the
+        reset, the backoff doubles every restart whether the previous
+        run was fine or not, which means three crashes at startup
+        make the doorbell take a minute to recover even after the
+        upstream is fixed.
+        """
+        delay = self._BACKOFF_INITIAL
         while not self._stop.is_set():
-            self._launch()
+            run_seconds = self._launch()
             if self._stop.is_set():
                 break
+            if run_seconds >= self._STABLE_RUN_SECONDS:
+                delay = self._BACKOFF_INITIAL
             logger.warning(
-                "ffmpeg for camera %s exited; restarting in %.0fs",
-                self.camera_name, delay,
+                "ffmpeg for camera %s exited after %.0fs; restarting in %.0fs",
+                self.camera_name, run_seconds, delay,
             )
             self._stop.wait(timeout=delay)
-            delay = min(delay * 2, 30.0)
+            delay = min(delay * 2, self._BACKOFF_MAX)
 
-    def _launch(self) -> None:
-        """Run ffmpeg until it exits.  Resets backoff to 2s on stable run."""
+    def _launch(self) -> float:
+        """Run ffmpeg until it exits.  Returns wall-clock seconds the
+        subprocess actually ran; the supervisor uses that to reset its
+        backoff on a stable run."""
         if shutil.which("ffmpeg") is None:
             logger.error("ffmpeg not on PATH — segmenter cannot start")
             self._stop.wait(timeout=10.0)
-            return
+            return 0.0
 
         cmd = self._build_ffmpeg_cmd()
         logger.info(
@@ -153,7 +170,7 @@ class CameraSegmenter:
         except OSError:
             logger.exception("Failed to spawn ffmpeg for %s", self.camera_name)
             self._stop.wait(timeout=10.0)
-            return
+            return 0.0
 
         run_started = time.monotonic()
         # Drain stderr so the buffer doesn't fill (which would block ffmpeg).
@@ -170,9 +187,7 @@ class CameraSegmenter:
                 if any(tag in lower for tag in ("error", "fail", "warn", "rtsp")):
                     logger.info("[ffmpeg %s] %s", self.camera_name, line)
         proc.wait()
-        if time.monotonic() - run_started > 30:
-            # Stable run — reset backoff in supervisor by a quiet exit
-            return
+        return time.monotonic() - run_started
 
     def _build_ffmpeg_cmd(self) -> list[str]:
         # ``-c copy`` keeps H.264 NALUs as-is; no decode.

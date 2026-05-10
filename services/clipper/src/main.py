@@ -1,4 +1,4 @@
-"""ScarGuard / OpenRing clipper service.
+"""OpenRing clipper service.
 
 Subscribes to ``openring:detections`` and ``openring:doorbell``,
 verifies HMAC, and for every qualifying event:
@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import signal
 import sys
 import threading
@@ -40,6 +41,14 @@ from healthcheck import start_heartbeat
 from segmenter import CameraSegmenter
 from settings import ClipperSettings, from_yaml, load_cameras
 from writer import write_clip
+
+# feedback_token is generated server-side as ``uuid.uuid4().hex`` (32 chars
+# of [0-9a-f]).  We accept any 8-128 char alnum-or-dash string here both to
+# be lenient with future token formats and to defeat path-traversal in
+# ``<token>.mp4``.  HMAC verification stops external injection, but a
+# compromised detector publishing ``feedback_token: "../../etc/...."`` in
+# a SIGNED payload would otherwise let the writer escape clips_dir.
+_FEEDBACK_TOKEN_RE = re.compile(r"^[a-zA-Z0-9_-]{8,128}$")
 
 logger = logging.getLogger(__name__)
 
@@ -120,12 +129,22 @@ def _make_clip(
     the web UI can show "clip unavailable" instead of an indefinite
     spinner.
     """
-    feedback_token = event.get("feedback_token", "")
+    feedback_token = str(event.get("feedback_token", ""))
     camera = event.get("camera_name", segmenter.camera_name)
     if not feedback_token:
         logger.warning(
             "Skipping clip — event has no feedback_token (camera=%s class=%s)",
             camera, event.get("class_name"),
+        )
+        return
+    # Path-traversal defence: feedback_token gets concatenated into a
+    # filesystem path below.  HMAC stops external injection, but a
+    # compromised detector publishing a signed payload with a slash-laden
+    # token would otherwise let the writer escape clips_dir.
+    if not _FEEDBACK_TOKEN_RE.match(feedback_token):
+        logger.error(
+            "Refusing clip — feedback_token %r is not a valid token shape "
+            "(camera=%s)", feedback_token, camera,
         )
         return
 
