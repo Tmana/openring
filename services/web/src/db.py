@@ -32,6 +32,32 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 
+def init_db() -> None:
+    """Create web-owned tables that don't exist yet.
+
+    The detector creates ``detection_events`` + ``app_state`` (see
+    services/detector/src/events.py).  In production the detector is
+    always up so those tables exist by the time the web service first
+    queries them.  In smoke / dev configurations where the detector
+    isn't running, the web service silently swallowed "no such table"
+    errors via the ``except Exception`` guards in ``get_app_state`` /
+    ``set_app_state`` — which made ``is_pairing_window_open()`` always
+    return False, breaking the doorbell pairing flow.
+
+    Owning the bootstrap of ``app_state`` here is safe because the
+    detector's ``CREATE TABLE IF NOT EXISTS`` is the same shape — the
+    two writers can coexist on different rows.  Idempotent.
+    """
+    with _connect() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS app_state (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+        """)
+        conn.commit()
+
+
 def get_events(
     limit: int = 100,
     offset: int = 0,
