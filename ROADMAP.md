@@ -143,10 +143,12 @@ hear what's happening at the door.
 known faces are configured. All embeddings stay on the host. No API
 calls anywhere.
 
-- [ ] **#23: `recognizer` sidecar.** Subscribes to detections, crops
-  the face region, computes embeddings via a small on-host model
-  (FaceNet / InsightFace ArcFace). Persists to its own sidecar SQLite
-  DB the way ScarGuard's deterrent does.
+- [x] **#23: `recognizer` sidecar.** Subscribes to detections, crops
+  the face region, computes embeddings via the on-host
+  `face_recognition` (dlib) library. Persists to its own
+  `/data/recognizer.db` SQLite file. Publishes outcomes on
+  `openring:recognition` (HMAC-signed). Off by default. Design doc:
+  `docs/FACE_RECOGNITION.md`.
 - [ ] **#24: Known-face enrollment UI.** Web page where the user
   uploads 3-5 photos per person, gives them a label.
 - [ ] **#25: Notification template extension.** The notifier learns

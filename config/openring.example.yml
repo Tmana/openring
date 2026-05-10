@@ -119,6 +119,44 @@ clipper:
   min_confidence: 0.40
   max_concurrent_clips: 4
 
+# v0.4: face recognition.  Opt-in.  Recognizer sidecar runs on-host —
+# no network calls of any kind, embeddings live in /data/recognizer.db,
+# reference photos in /data/face-references/.  See docs/FACE_RECOGNITION.md.
+#
+# Two user-visible outcomes wired through the `rules` block (consumed by
+# the notifier in v0.4 PR-C):
+#   * suppression — `channels: []` for a label, e.g. household members
+#     get logged but not paged.
+#   * escalation — multi-channel set including a webhook your auto-call
+#     provider listens on.
+#
+# Special labels:
+#   "*"        any matched-known face (fallback when no specific rule)
+#   "unknown"  a face was detected but did not match any enrolled face
+#
+# Empty `rules` (or face_recognition.enabled: false) preserves v0.1
+# behavior — every event flows through the per-camera notification_rules
+# above.
+face_recognition:
+  enabled: false
+  trigger_classes: [person]
+  min_confidence: 0.40
+  bbox_padding_pct: 0.20            # widen YOLO bbox before face detection
+  tolerance: 0.6                    # face_recognition lib distance; lower = stricter
+  max_concurrent_workers: 2
+  rules: []
+  # Examples — uncomment + edit when you've enrolled faces in the web UI:
+  # rules:
+  #   - label: "Sarah"             # household — quiet, just log
+  #     channels: []
+  #   - label: "ex-roommate"       # escalate — multi-channel + auto-call hook
+  #     channels: [phone-ntfy, owner-email, panic-webhook]
+  #     priority: high
+  #   - label: "unknown"           # default for strangers
+  #     channels: [phone-ntfy]
+  #   - label: "*"                 # any-known fallback
+  #     channels: [phone-ntfy]
+
 tls:
   mode: "off"                       # off (LAN-only) | auto (Let's Encrypt) | manual
   domain: ""
