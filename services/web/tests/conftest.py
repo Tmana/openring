@@ -10,14 +10,25 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 # ── Point app at temp paths so tests never touch /data or /config ──────────
+# main.py does Path(SNAPSHOT_DIR).mkdir(...) etc. at module-import time, so
+# every directory the app touches must be redirected here BEFORE the first
+# `import main` anywhere in the test tree.  Missing CLIPS_DIR was the
+# cause of the long-standing CI failure in test_auth_enabled_parse.py:
+# main.py defaults CLIPS_DIR to /data/clips, then crashes mkdir-ing it on
+# the runner where /data is read-only.
 os.environ["CONFIG_PATH"] = "/tmp/sg-test.yml"
 os.environ["DB_PATH"] = "/tmp/sg-test.db"
 os.environ["SNAPSHOT_DIR"] = "/tmp/sg-test-snapshots"
 os.environ["MODELS_DIR"] = "/tmp/sg-test-models"
+os.environ["CLIPS_DIR"] = "/tmp/sg-test-clips"
 os.environ["AUTH_DB_PATH"] = "/tmp/sg-test-auth.db"
+os.environ["RECOGNIZER_DB_PATH"] = "/tmp/sg-test-recognizer.db"
+os.environ["FACE_REFERENCES_DIR"] = "/tmp/sg-test-face-refs"
 
 Path("/tmp/sg-test-snapshots").mkdir(exist_ok=True)
 Path("/tmp/sg-test-models").mkdir(exist_ok=True)
+Path("/tmp/sg-test-clips").mkdir(exist_ok=True)
+Path("/tmp/sg-test-face-refs").mkdir(exist_ok=True)
 
 import pytest  # noqa: E402
 

@@ -328,6 +328,11 @@ fi
 
 step "Rendering ${CONFIG_DIR}/mediamtx.yml"
 if [[ "$DRY_RUN" -eq 0 ]]; then
+    # envsubst takes a single-quoted *literal* list of variable names so
+    # only the listed vars get substituted — anything else in the
+    # template is left untouched.  Shellcheck SC2016 ("expressions don't
+    # expand in single quotes") is a false positive for this idiom.
+    # shellcheck disable=SC2016
     RTSP_PASSWORD="${RTSP_PASSWORD}" envsubst '${RTSP_PASSWORD}' \
         < "${SRC_DIR}/config/mediamtx.yml.template" \
         > "${CONFIG_DIR}/mediamtx.yml"
