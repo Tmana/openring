@@ -28,43 +28,24 @@ def fresh_auth_db():
     ``get_db(db_path=AUTH_DB_PATH)``.  Instead we use the conftest path
     everywhere and wipe rows between tests so isolation is preserved.
 
-    Issue #20: this fixture used to init the DB once and let the route
-    handler hit the same file via ``auth_module.get_db(AUTH_DB_PATH)``.
-    On Linux CI the route's connection saw "no such table:
-    device_tokens" even though the fixture had just CREATE'd it,
-    surfacing as 12 failing tests in this file.  The defence:
-    sanity-check the schema after init_db, and assert AUTH_DB_PATH
-    captured by every route module agrees with the fixture's path.
-    Failing fast here gives CI a useful error instead of a deep
-    traceback inside ``create_device_token``.
+    Issue #20 regression guard: the AUTH_DB_PATH used by every route
+    module captured at *its* import time must agree with the env-var
+    value at fixture time.  ``test_auth_roles.py`` previously mutated
+    the env var without restoration, leaking a tempfile path that made
+    the route's INSERT crash with "no such table: device_tokens" even
+    though this fixture's init_db succeeded against a different file.
+    The check fails fast with a clear message if anyone reintroduces a
+    similar leak.
     """
-    import sqlite3 as _sqlite
     path = os.environ["AUTH_DB_PATH"]
-    auth_module.init_db(path)
-
-    # Confirm device_tokens actually exists at the path the route will use.
-    # auth_module.AUTH_DB_PATH is the function-default-arg used by get_db
-    # when called without args; the route uses doorbell.AUTH_DB_PATH which
-    # was captured at routes.doorbell import time.  Both should resolve to
-    # the same string, but assert it.
     from routes import doorbell as _doorbell_route
     assert path == auth_module.AUTH_DB_PATH == _doorbell_route.AUTH_DB_PATH, (
-        f"AUTH_DB_PATH mismatch: env={path!r}, "
-        f"auth_module={auth_module.AUTH_DB_PATH!r}, "
+        f"AUTH_DB_PATH mismatch — another test leaked an env mutation. "
+        f"env={path!r}, auth_module={auth_module.AUTH_DB_PATH!r}, "
         f"doorbell={_doorbell_route.AUTH_DB_PATH!r}"
     )
-    sanity = _sqlite.connect(path)
-    try:
-        names = {r[0] for r in sanity.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()}
-    finally:
-        sanity.close()
-    assert "device_tokens" in names, (
-        f"init_db ran on {path!r} but device_tokens is missing.  "
-        f"Tables present: {sorted(names)}"
-    )
 
+    auth_module.init_db(path)
     db = auth_module.get_db()
     try:
         # Wipe state from previous tests — devices first (no FK), then sessions/tokens.
