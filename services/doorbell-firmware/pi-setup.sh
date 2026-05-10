@@ -170,8 +170,9 @@ run() {
 
 step "Installing apt dependencies"
 APT_PACKAGES=(
-    python3 python3-gpiozero python3-requests
+    python3 python3-gpiozero python3-requests python3-websockets
     libcamera-apps ffmpeg iw
+    alsa-utils opus-tools                 # v0.3: arecord, aplay, opusenc, opusdec
     curl jq ca-certificates gettext-base
 )
 if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -258,7 +259,16 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     install -d -m 0755 -o "${OPENRING_USER}" -g "${OPENRING_GROUP}" "${INSTALL_DIR}/src"
     install -m 0644 -o "${OPENRING_USER}" -g "${OPENRING_GROUP}" \
         "${SRC_DIR}/src/"*.py "${INSTALL_DIR}/src/"
-    ok "Python sources installed at ${INSTALL_DIR}/src/"
+    # v0.3: install the cross-service shared/ tree alongside the device
+    # sources so audio_relay.py can import audio_frames.  The repo's
+    # shared/ is two directories up from services/doorbell-firmware/.
+    SHARED_SRC="$(cd "${SRC_DIR}/../../shared" 2>/dev/null && pwd || true)"
+    if [[ -n "${SHARED_SRC}" && -d "${SHARED_SRC}" ]]; then
+        install -d -m 0755 -o "${OPENRING_USER}" -g "${OPENRING_GROUP}" "${INSTALL_DIR}/shared"
+        install -m 0644 -o "${OPENRING_USER}" -g "${OPENRING_GROUP}" \
+            "${SHARED_SRC}/"*.py "${INSTALL_DIR}/shared/" 2>/dev/null || true
+    fi
+    ok "Python sources installed at ${INSTALL_DIR}/{src,shared}/"
 fi
 
 # ── Step 5: pair with the host ───────────────────────────────────────
@@ -342,7 +352,7 @@ step "Installing + enabling systemd units"
 if [[ "$DRY_RUN" -eq 0 ]]; then
     install -m 0644 "${SRC_DIR}/systemd/"*.service /etc/systemd/system/
     systemctl daemon-reload
-    for unit in openring-mediamtx openring-button openring-heartbeat; do
+    for unit in openring-mediamtx openring-button openring-heartbeat openring-audio; do
         systemctl enable --now "${unit}.service" >/dev/null 2>&1 || true
         if systemctl is-active --quiet "${unit}.service"; then
             ok "${unit}.service active"

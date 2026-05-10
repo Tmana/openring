@@ -175,6 +175,35 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
 
+  # ── Audio relay (sidecar) ────────────────────────────────────────────
+  # v0.3: half-duplex push-to-talk pairing.  One WebSocket to each
+  # paired Pi (Bearer-authed) and one to each browser session
+  # (JWT-authed via OPENRING_AUDIO_KEY).  See docs/AUDIO.md.
+  audio-relay:
+    build:
+      context: .
+      dockerfile: services/audio-relay/Dockerfile
+    image: openring-audio-relay:${IMAGE_TAG:-dev}
+    environment:
+      AUDIO_RELAY_HOST: 0.0.0.0
+      AUDIO_RELAY_PORT: "8765"
+      AUTH_DB_PATH: /data/auth.db
+      OPENRING_AUDIO_KEY: ${OPENRING_AUDIO_KEY:-}
+      LOG_LEVEL: info
+    volumes:
+      - openring-data:/data:ro            # ro — only reads device_tokens
+    depends_on:
+      web:
+        condition: service_started        # web initialises auth.db
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 100
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
+    # Caddy will proxy /audio/* to this container in PR-B; not exposed externally.
+
   # ── Notifier ─────────────────────────────────────────────────────────
   notifier:
     build:
