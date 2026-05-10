@@ -220,9 +220,10 @@ try:
 except urllib.error.HTTPError as e:
     # Print the body so the operator can see *why* (pairing-window
     # closed, bad device_id, etc.) instead of just an opaque traceback.
+    # Don't re-raise — the bash side checks for the expected device_token
+    # field and surfaces the body verbatim if it's missing.
     body = e.read().decode()
     print(f"HTTP {e.code}: {body}")
-    raise
 PY
 )
 DEVICE_TOKEN=$(echo "${REGISTER_RESPONSE}" | jq -er '.device_token') || \
