@@ -33,23 +33,52 @@ def _connect() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """Create web-owned tables that don't exist yet.
+    """Create the openring.db tables the web service depends on.
 
-    The detector creates ``detection_events`` + ``app_state`` (see
-    services/detector/src/events.py).  In production the detector is
-    always up so those tables exist by the time the web service first
-    queries them.  In smoke / dev configurations where the detector
-    isn't running, the web service silently swallowed "no such table"
-    errors via the ``except Exception`` guards in ``get_app_state`` /
-    ``set_app_state`` — which made ``is_pairing_window_open()`` always
-    return False, breaking the doorbell pairing flow.
+    The detector also creates these tables (see
+    services/detector/src/events.py:_init_db).  In production the
+    detector is always up so they exist by the time the web service
+    queries them; in smoke / dev configurations where the detector
+    isn't running first, the web's queries used to silently fail
+    (``app_state`` swallowed the "no such table" error in its
+    try/except, ``detection_events`` 500'd the doorbell-press flow).
 
-    Owning the bootstrap of ``app_state`` here is safe because the
-    detector's ``CREATE TABLE IF NOT EXISTS`` is the same shape — the
-    two writers can coexist on different rows.  Idempotent.
+    Web service owns the bootstrap here.  All schemas use
+    ``CREATE TABLE IF NOT EXISTS`` so coexistence with the detector's
+    own init is safe — first writer wins, the rest are no-ops.
+
+    The schema is kept minimal: just the columns needed for the
+    write/read paths the web service actually exercises.  The
+    detector's ALTER-based migrations stay intact and continue to add
+    feedback / corrected_class / etc. columns on its first boot.
     """
     with _connect() as conn:
         conn.executescript("""
+            CREATE TABLE IF NOT EXISTS detection_events (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp         TEXT    NOT NULL,
+                class_name        TEXT    NOT NULL,
+                confidence        REAL    NOT NULL,
+                camera_name       TEXT    NOT NULL,
+                snapshot_path     TEXT,
+                actions_triggered TEXT,
+                bbox              TEXT,
+                frame_size        TEXT,
+                feedback          TEXT,
+                corrected_class   TEXT,
+                feedback_token    TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS visit_sessions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                camera_name     TEXT    NOT NULL,
+                class_name      TEXT    NOT NULL,
+                start_time      TEXT    NOT NULL,
+                end_time        TEXT    NOT NULL,
+                duration_secs   REAL    NOT NULL,
+                detection_count INTEGER NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS app_state (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL

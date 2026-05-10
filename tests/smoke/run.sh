@@ -232,7 +232,7 @@ ok "device registered, token captured"
 
 step "Firing a doorbell press"
 PRESS_RESPONSE=$(docker compose exec -T -e TOKEN="${DEVICE_TOKEN}" web python3 <<'PY'
-import os, urllib.request, json
+import os, urllib.request, urllib.error, json
 body = json.dumps({"timestamp": "2026-05-09T18:00:00+00:00", "device_id": "smoke-test"}).encode()
 req = urllib.request.Request(
     'http://localhost:8080/api/doorbell/press',
@@ -243,8 +243,12 @@ req = urllib.request.Request(
     },
     data=body,
 )
-resp = urllib.request.urlopen(req, timeout=10)
-print(resp.read().decode())
+try:
+    resp = urllib.request.urlopen(req, timeout=10)
+    print(resp.read().decode())
+except urllib.error.HTTPError as e:
+    body = e.read().decode()
+    print(f"HTTP {e.code}: {body}")
 PY
 )
 EVENT_ID=$(echo "${PRESS_RESPONSE}" | jq -er '.event_id') || \
