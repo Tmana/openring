@@ -18,48 +18,64 @@ import tempfile
 import pytest
 
 
+def _swap_auth_db(path: str):
+    """Save + replace AUTH_DB_PATH and reload auth.  Returns the prior env value."""
+    prior = os.environ.get("AUTH_DB_PATH")
+    os.environ["AUTH_DB_PATH"] = path
+    import auth  # noqa: WPS433
+    importlib.reload(auth)
+    return prior
+
+
+def _restore_auth_db(prior: str | None) -> None:
+    """Reverse of ``_swap_auth_db``: restore env + reload auth."""
+    if prior is None:
+        os.environ.pop("AUTH_DB_PATH", None)
+    else:
+        os.environ["AUTH_DB_PATH"] = prior
+    import auth  # noqa: WPS433
+    importlib.reload(auth)
+
+
 @pytest.fixture
-def fresh_auth(monkeypatch):
+def fresh_auth():
     """Yield the auth module bound to a brand-new temp DB.
 
-    Uses ``monkeypatch.setenv`` so the AUTH_DB_PATH env mutation is
-    auto-restored on teardown.  Issue #20: the previous version of this
-    fixture used a bare ``os.environ[...] = ...`` assignment without
-    restoration, leaking the temp path into every subsequent test in the
-    session.  In particular ``test_doorbell_routes.py`` then init'd
-    auth tables at the leaked tempfile path while route handlers still
-    queried the original conftest path captured at module-import time
-    by ``services/web/src/routes/doorbell.py:AUTH_DB_PATH``, surfacing
-    as 12 spurious "no such table: device_tokens" failures.
+    Issue #20: previous version did ``os.environ[...] = path`` without a
+    restore, leaking the tempfile path into every subsequent test.
+    ``test_doorbell_routes.py`` then init'd tables at the leaked path
+    while route handlers (which had captured ``AUTH_DB_PATH`` at their
+    own module-import time, before the leak) queried the conftest
+    value, producing 12 spurious "no such table: device_tokens"
+    failures.
 
-    The ``importlib.reload(auth)`` is still required because the module-
-    level ``AUTH_DB_PATH = os.environ.get(...)`` and the function default
-    args bind to that constant at import time; without a reload, the
-    fixture's path change wouldn't be picked up.  monkeypatch reverts the
-    env var, and a teardown reload here restores ``auth.AUTH_DB_PATH`` to
-    the conftest value so the next test sees a clean module state.
+    The save-and-restore is done manually instead of via
+    ``monkeypatch.setenv`` because pytest tears fixtures down in reverse
+    setup order — monkeypatch's teardown would fire AFTER our post-yield
+    ``importlib.reload(auth)``, leaving auth pointing at the (deleted)
+    tempfile until the next test forced another reload.  Doing the
+    restore inline guarantees auth.py module state is consistent before
+    we hand control back to pytest.
     """
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     os.unlink(path)  # init_db will create it
-    monkeypatch.setenv("AUTH_DB_PATH", path)
-    import auth  # noqa: WPS433
+    prior = _swap_auth_db(path)
 
-    importlib.reload(auth)
+    import auth  # noqa: WPS433
     auth.init_db()
-    yield auth
     try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
-    # Restore auth module state for downstream tests.  monkeypatch.setenv
-    # has already restored os.environ; reload re-binds AUTH_DB_PATH and
-    # the function default args to the conftest value.
-    importlib.reload(auth)
+        yield auth
+    finally:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        _restore_auth_db(prior)
 
 
 @pytest.fixture
-def legacy_auth(monkeypatch):
+def legacy_auth():
     """Yield the auth module bound to a temp DB that mimics a pre-v0.12.7 schema.
 
     The users table exists but has NO ``role`` column — migration fills it.
@@ -86,18 +102,18 @@ def legacy_auth(monkeypatch):
     )
     conn.commit()
     conn.close()
+    prior = _swap_auth_db(path)
 
-    monkeypatch.setenv("AUTH_DB_PATH", path)
     import auth  # noqa: WPS433
-
-    importlib.reload(auth)
     auth.init_db()
-    yield auth
     try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
-    importlib.reload(auth)
+        yield auth
+    finally:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        _restore_auth_db(prior)
 
 
 class TestRoleMigration:
