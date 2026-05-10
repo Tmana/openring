@@ -92,6 +92,25 @@ class TestCoalescence:
         time.sleep(0.05)
         assert len(dispatched) == 1
 
+    def test_recognition_before_detection_is_dropped(self, buffer):
+        """Race: recognition arrives before its detection is buffered.
+
+        Buffer drops the orphan recognition (no detection to coalesce
+        with).  When the detection arrives later, it has no recognition
+        to fold in and dispatches via the timeout path.  This is the
+        documented behaviour — we don't try to retain orphan
+        recognitions because the matching detection may never arrive
+        (e.g. detector was disabled between publish and re-subscribe).
+        """
+        buf, dispatched = buffer
+        buf.submit_recognition(_rec(token="t-race"))
+        time.sleep(0.02)
+        assert dispatched == []
+        # Now the detection arrives.  Times out without a recognition.
+        buf.submit_detection(_det(token="t-race"))
+        assert _wait_for(lambda: len(dispatched) == 1, timeout=2.0)
+        assert "_recognition" not in dispatched[0]
+
 
 class TestEdgeCases:
     def test_detection_without_token_dispatches_immediately(self, buffer):

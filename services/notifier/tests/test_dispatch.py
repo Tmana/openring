@@ -200,8 +200,11 @@ class TestDispatchRouting:
         notifier.send.assert_not_called()
         # Internal handles must not be visible to the notifier even
         # when fan-out happens — verify they're stripped on the
-        # mutated event dict.
+        # mutated event dict.  H1 from the PR-C self-review: stripping
+        # _recognition is load-bearing for the docs/FACE_RECOGNITION.md
+        # §5.2 promise that face labels never reach unwired channels.
         assert "_face_rules" not in event
+        assert "_recognition" not in event
 
     def test_face_rule_escalation_at_dispatch(self):
         """End-to-end: a recognition + escalation rule fans out to the
@@ -232,6 +235,11 @@ class TestDispatchRouting:
         n_skip.send.assert_not_called()
         # Priority hint propagates so notifiers can boost urgency.
         assert n1.send.call_args[0][0]["priority"] == "high"
+        # H1: even when fan-out succeeds, internal handles never reach
+        # the notifier's view of the event dict.
+        delivered = n1.send.call_args[0][0]
+        assert "_face_rules" not in delivered
+        assert "_recognition" not in delivered
 
     def test_face_rule_no_recognition_falls_through(self):
         """A missing _recognition leaves dispatch on its legacy path."""
