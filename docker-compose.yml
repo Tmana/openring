@@ -175,6 +175,42 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
 
+  # ── Recognizer (sidecar) ─────────────────────────────────────────────
+  # v0.4: face-recognition sidecar.  Off by default — opt-in via
+  # face_recognition.enabled in openring.yml.  Owns recognizer.db (its
+  # own SQLite file) and a /data/face-references directory of enrolled
+  # photos.  All processing is on-host; the service makes no outbound
+  # HTTP calls of any kind.
+  recognizer:
+    build:
+      context: .
+      dockerfile: services/recognizer/Dockerfile
+    image: openring-recognizer:${IMAGE_TAG:-dev}
+    environment:
+      CONFIG_PATH: /config/openring.yml
+      RECOGNIZER_DB_PATH: /data/recognizer.db
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      DETECTION_HMAC_KEY: ${DETECTION_HMAC_KEY:-}
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/healthy -mmin -1 | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    volumes:
+      - openring-config:/config:ro
+      - openring-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 2.0
+    pids_limit: 200
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
+
   # ── Notifier ─────────────────────────────────────────────────────────
   notifier:
     build:

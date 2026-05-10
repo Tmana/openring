@@ -86,6 +86,8 @@ done.
 # Ruff — all services
 ruff check services/detector/src services/web/src \
             services/notifier/src services/doorbell-firmware/src \
+            services/clipper/src services/audio-relay/src \
+            services/recognizer/src \
             shared
 
 # mypy — web
@@ -102,10 +104,18 @@ MYPYPATH=services/notifier/src:shared \
 MYPYPATH=services/doorbell-firmware/src:shared \
   python3 -m mypy services/doorbell-firmware/src shared \
     --ignore-missing-imports --explicit-package-bases
+
+# mypy — recognizer
+MYPYPATH=services/recognizer/src:shared \
+  python3 -m mypy services/recognizer/src shared \
+    --ignore-missing-imports --explicit-package-bases
 ```
 
 `detector` is excluded from mypy in CI because torch / opencv /
-ultralytics are only present on the inference image.
+ultralytics are only present on the inference image.  `recognizer`
+relies on `face_recognition` / `dlib` which are also too heavy for
+the CI image — they're declared `ignore_missing_imports` so the
+type-check passes without the wheel installed.
 
 Required dev packages: `pip install ruff mypy types-PyYAML
 types-requests types-redis pytest pillow`.
@@ -126,6 +136,7 @@ review prompt is in [CONTRIBUTING.md](CONTRIBUTING.md).
 | `services/notifier/` | Redis subscriber, dispatches to ntfy / Discord / email / webhook |
 | `services/doorbell-firmware/` | Pi-side: button, heartbeat, MediaMTX wrapper |
 | `services/audio-relay/` | (v0.3) bidirectional audio bridge |
+| `services/recognizer/` | (v0.4) on-host face recognition sidecar; owns `recognizer.db` |
 | `shared/` | Cross-service Python (event signing, config watcher, URL safety, atomic ref) |
 | `docs/` | Specs, walkthroughs, reference |
 | `config/` | Default templates (no secrets) |
