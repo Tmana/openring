@@ -165,8 +165,13 @@ def _apply_face_rules(event: dict) -> dict:
         if outcome.priority == "high":
             event["priority"] = "high"
     # Strip the internal handles so notifier implementations don't see
-    # them in their templated payloads.
+    # them in their templated payloads.  Stripping ``_recognition`` is
+    # load-bearing for privacy: docs/FACE_RECOGNITION.md §5.2 promises
+    # face labels do not leak into webhook payloads on channels the
+    # operator hasn't wired, and several notifier types JSON-dump the
+    # whole event dict.
     event.pop("_face_rules", None)
+    event.pop("_recognition", None)
     return event
 
 
