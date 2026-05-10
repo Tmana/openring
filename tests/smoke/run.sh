@@ -206,7 +206,7 @@ ok "pairing window opened"
 
 step "Registering smoke-test device"
 REGISTER_RESPONSE=$(docker compose exec -T web python3 <<'PY'
-import urllib.request, json
+import urllib.request, urllib.error, json
 body = json.dumps({"device_id": "smoke-test", "label": "Smoke test"}).encode()
 req = urllib.request.Request(
     'http://localhost:8080/api/doorbell/register',
@@ -214,8 +214,15 @@ req = urllib.request.Request(
     headers={'Content-Type': 'application/json'},
     data=body,
 )
-resp = urllib.request.urlopen(req, timeout=5)
-print(resp.read().decode())
+try:
+    resp = urllib.request.urlopen(req, timeout=5)
+    print(resp.read().decode())
+except urllib.error.HTTPError as e:
+    # Print the body so the operator can see *why* (pairing-window
+    # closed, bad device_id, etc.) instead of just an opaque traceback.
+    body = e.read().decode()
+    print(f"HTTP {e.code}: {body}")
+    raise
 PY
 )
 DEVICE_TOKEN=$(echo "${REGISTER_RESPONSE}" | jq -er '.device_token') || \
