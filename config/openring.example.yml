@@ -139,6 +139,13 @@ clipper:
 # above.
 face_recognition:
   enabled: false
+  # face_rules_enabled is the v0.4 PR-C kill-switch.  Even when the
+  # recognizer is on (above) and writing recognition rows, the
+  # notifier will still flow events through the legacy
+  # notification_rules path until you flip this to true.  Lets you
+  # observe a week of recognitions in the events page before changing
+  # how alerts fire.
+  face_rules_enabled: false
   trigger_classes: [person]
   min_confidence: 0.40
   bbox_padding_pct: 0.20            # widen YOLO bbox before face detection

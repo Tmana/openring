@@ -30,6 +30,7 @@ CHANNEL = "openring:detections"
 HEALTH_CHANNEL = "openring:health"
 DOORBELL_CHANNEL = "openring:doorbell"
 DEVICE_CHANNEL = "openring:device"
+RECOGNITION_CHANNEL = "openring:recognition"
 
 # How long to wait before retrying a failed Redis connection (seconds).
 _REDIS_RECONNECT_DELAY = 5
@@ -122,6 +123,53 @@ def build_notifiers(notif_cfg: dict, tz_name: str = "UTC") -> list[DiscordNotifi
     return notifiers
 
 
+def _apply_face_rules(event: dict) -> dict:
+    """Fold a recognition outcome into the event's actions_triggered.
+
+    Mutates and returns the event dict.  No-op when no recognition is
+    attached.  Face rules *override* the per-camera notification_rules
+    decision because face identity is the more specific signal —
+    "Sarah at the front door" outranks "person at the front door".
+    The notifier's existing actions_triggered semantics (None → suppress,
+    [...] → fan out to those channels, [] → fan out to all) carries the
+    decision through unchanged.
+    """
+    import face_rules
+    recognition = event.get("_recognition")
+    if not isinstance(recognition, dict):
+        return event
+    rules_cfg = event.get("_face_rules")
+    outcome = face_rules.evaluate(recognition, rules_cfg)
+    if outcome is None:
+        return event
+    if outcome.action == "suppress":
+        logger.info(
+            "Face rule %r matched (status=%s, label=%s) — suppressing notification",
+            outcome.matched_label,
+            recognition.get("status"),
+            recognition.get("label"),
+        )
+        event["actions_triggered"] = None
+    else:
+        logger.info(
+            "Face rule %r matched (status=%s, face_id=%s) — fanning out to %s",
+            outcome.matched_label,
+            recognition.get("status"),
+            recognition.get("face_id"),
+            outcome.channels,
+        )
+        event["actions_triggered"] = list(outcome.channels)
+        # Pass priority through so notifiers (ntfy especially) can boost
+        # urgency.  Existing notifiers ignore the field if they don't
+        # care, so this is safe to always set.
+        if outcome.priority == "high":
+            event["priority"] = "high"
+    # Strip the internal handles so notifier implementations don't see
+    # them in their templated payloads.
+    event.pop("_face_rules", None)
+    return event
+
+
 def dispatch(
     event: dict,
     notifiers: list[DiscordNotifier | EmailNotifier | WebhookNotifier | NtfyNotifier],
@@ -134,6 +182,11 @@ def dispatch(
     when a queue is provided.  Without a queue the error is logged and the next
     notifier is still attempted.
     """
+    # Face-rules layer — applies before the existing actions_triggered
+    # logic.  If a face rule matched, it has already overwritten the
+    # field; if not, the per-camera notification_rules decision survives.
+    event = _apply_face_rules(event)
+
     if notifiers_lock is not None:
         with notifiers_lock:
             current = list(notifiers)
@@ -201,6 +254,23 @@ def _start_retry_worker(
     return t
 
 
+def _face_rules_settings(cfg: dict) -> tuple[bool, object, object]:
+    """Pull the v0.4 face-rules controls out of openring.yml.
+
+    Returns (enabled, trigger_classes, rules).  The notifier reads
+    these on each event so a hot-reload of the config takes effect on
+    the next message — no need for an AtomicRef indirection because
+    the cost of a dict lookup per message is negligible.
+    """
+    fr = cfg.get("face_recognition") or {}
+    if not isinstance(fr, dict):
+        return False, [], []
+    enabled = bool(fr.get("face_rules_enabled", False))
+    trigger = fr.get("trigger_classes")
+    rules = fr.get("rules")
+    return enabled, trigger, rules
+
+
 def subscribe_loop(
     redis_cfg: dict,
     notifiers: list,
@@ -208,6 +278,7 @@ def subscribe_loop(
     shutdown_event: threading.Event,
     queue: NotificationQueue,
     _base_url_ref: AtomicRef[str] | None = None,
+    face_cfg_ref: AtomicRef[dict] | None = None,
 ) -> None:
     """Connect to Redis and listen for events, reconnecting on failure.
 
@@ -217,7 +288,9 @@ def subscribe_loop(
     but we still log loudly — spoofed events would otherwise leak camera
     snapshots to the attacker's own webhook destinations.
     """
+    import face_rules
     from event_signing import load_key_from_env, verify_event
+    from recognition_buffer import RecognitionBuffer
 
     host = redis_cfg.get("host", "redis")
     port = int(redis_cfg.get("port", 6379))
@@ -230,6 +303,19 @@ def subscribe_loop(
     invalid_warned = False
     delay = _REDIS_RECONNECT_DELAY
 
+    def _flush_dispatch(event: dict) -> None:
+        """Buffer-callback that dispatches a (maybe-annotated) event.
+
+        This is the on_dispatch hook for RecognitionBuffer — runs in
+        the buffer's own poll thread for timeouts and in the
+        subscribe-loop thread for happy-path coalescence.  Both paths
+        are fine because dispatch() takes notifiers_lock internally.
+        """
+        dispatch(event, notifiers, notifiers_lock, queue)
+
+    rec_buffer = RecognitionBuffer(_flush_dispatch)
+    rec_buffer.start()
+
     while not shutdown_event.is_set():
         client: redis_lib.Redis | None = None
         pubsub: redis_lib.client.PubSub | None = None
@@ -237,10 +323,14 @@ def subscribe_loop(
             redis_password = os.environ.get("REDIS_PASSWORD", "") or None
             client = redis_lib.Redis(host=host, port=port, password=redis_password, decode_responses=True)
             pubsub = client.pubsub()
-            pubsub.subscribe(CHANNEL, HEALTH_CHANNEL, DOORBELL_CHANNEL, DEVICE_CHANNEL)
+            pubsub.subscribe(
+                CHANNEL, HEALTH_CHANNEL, DOORBELL_CHANNEL,
+                DEVICE_CHANNEL, RECOGNITION_CHANNEL,
+            )
             logger.info(
-                "Subscribed to Redis channels: %s, %s, %s, %s",
-                CHANNEL, HEALTH_CHANNEL, DOORBELL_CHANNEL, DEVICE_CHANNEL,
+                "Subscribed to Redis channels: %s, %s, %s, %s, %s",
+                CHANNEL, HEALTH_CHANNEL, DOORBELL_CHANNEL,
+                DEVICE_CHANNEL, RECOGNITION_CHANNEL,
             )
             delay = _REDIS_RECONNECT_DELAY  # reset backoff on successful connect
             pathlib.Path("/tmp/healthy").touch(exist_ok=True)
@@ -259,10 +349,12 @@ def subscribe_loop(
                     continue
 
                 # Signature verification (detection + doorbell + device
-                # channels — health alerts come from the detector's health
-                # publisher, not the detection publisher, and aren't
-                # signed today).
-                signed_channels = (CHANNEL, DOORBELL_CHANNEL, DEVICE_CHANNEL)
+                # + recognition channels — health alerts come from the
+                # detector's health publisher, not the detection
+                # publisher, and aren't signed today).
+                signed_channels = (
+                    CHANNEL, DOORBELL_CHANNEL, DEVICE_CHANNEL, RECOGNITION_CHANNEL,
+                )
                 if message["channel"] in signed_channels and hmac_key is not None:
                     if not verify_event(event, hmac_key):
                         if not invalid_warned:
@@ -332,6 +424,14 @@ def subscribe_loop(
                 if base_url:
                     event["_base_url"] = base_url
 
+                # Recognition channel: coalesce with the buffered
+                # detection event (if any).  Always serviced — but if
+                # face_rules.enabled is false, the buffer is empty so
+                # this is effectively a no-op.
+                if message["channel"] == RECOGNITION_CHANNEL:
+                    rec_buffer.submit_recognition(event)
+                    continue
+
                 if message["channel"] == DEVICE_CHANNEL:
                     # v0.2 #16: device offline / recovered watchdog events.
                     # Translate into a dispatchable event shape so the
@@ -374,18 +474,43 @@ def subscribe_loop(
                     continue
 
                 if message["channel"] == DOORBELL_CHANNEL:
+                    # Doorbell presses are high-priority and never wait
+                    # for a face match — see docs/FACE_RECOGNITION.md
+                    # §4.1 "we will never hold a doorbell-press
+                    # notification waiting for a face match".
                     logger.info(
                         "Doorbell press received: device=%s label=%s",
                         event.get("device_id") or event.get("camera_name"),
                         event.get("label", "?"),
                     )
-                else:
-                    logger.info(
-                        "Event received: %s from %s (conf=%.2f)",
-                        event.get("class_name"),
-                        event.get("camera_name"),
-                        event.get("confidence", 0.0),
-                    )
+                    dispatch(event, notifiers, notifiers_lock, queue)
+                    continue
+
+                logger.info(
+                    "Event received: %s from %s (conf=%.2f)",
+                    event.get("class_name"),
+                    event.get("camera_name"),
+                    event.get("confidence", 0.0),
+                )
+
+                # If face_rules.enabled and this class is a face-rules
+                # candidate, route through the coalescence buffer so
+                # the recognizer's outcome can shape the dispatch.
+                # Otherwise dispatch immediately — preserves the legacy
+                # path bit-for-bit when the operator hasn't opted in.
+                cfg_now = face_cfg_ref.get() if face_cfg_ref else {}
+                fr_enabled, fr_triggers, fr_rules = _face_rules_settings(cfg_now)
+                if fr_enabled and face_rules.is_face_class(
+                    event.get("class_name"), fr_triggers,
+                ):
+                    # Stash the rules block on the event so dispatch's
+                    # _apply_face_rules can find it without reaching
+                    # back into config_store.  Strip it back out
+                    # before any notifier sees the payload.
+                    event["_face_rules"] = fr_rules
+                    rec_buffer.submit_detection(event)
+                    continue
+
                 dispatch(event, notifiers, notifiers_lock, queue)
 
         except redis_lib.RedisError:
@@ -409,6 +534,7 @@ def subscribe_loop(
                 except Exception:
                     pass
 
+    rec_buffer.stop(flush=True)
     logger.info("Subscription loop exited")
 
 
@@ -422,6 +548,7 @@ def main() -> None:
     notifiers = build_notifiers(cfg.get("notifications", {}), tz_name)
     notifiers_lock = threading.Lock()
     base_url_ref: AtomicRef[str] = AtomicRef(_derive_base_url(cfg))
+    face_cfg_ref: AtomicRef[dict] = AtomicRef(cfg)
     if not notifiers:
         logger.warning("No notifiers enabled — will consume events without dispatching")
 
@@ -456,6 +583,7 @@ def main() -> None:
         _decrypt_secrets(new_cfg)
         new_tz = new_cfg.get("system", {}).get("timezone", "UTC")
         base_url_ref.set(_derive_base_url(new_cfg))
+        face_cfg_ref.set(new_cfg)
         new_notifiers = build_notifiers(new_cfg.get("notifications", {}), new_tz)
         with notifiers_lock:
             notifiers.clear()
@@ -477,7 +605,10 @@ def main() -> None:
 
     _start_retry_worker(queue, notifiers, notifiers_lock, shutdown_event)
 
-    subscribe_loop(cfg.get("redis", {}), notifiers, notifiers_lock, shutdown_event, queue, base_url_ref)
+    subscribe_loop(
+        cfg.get("redis", {}), notifiers, notifiers_lock,
+        shutdown_event, queue, base_url_ref, face_cfg_ref,
+    )
 
     watcher.stop()
     digest_scheduler.stop()

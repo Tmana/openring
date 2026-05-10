@@ -345,9 +345,9 @@ arrives in 2 s, the notifier dispatches via the existing path. We will
 *never* hold a doorbell-press notification waiting for a face match —
 the press is the higher-priority event.
 
-PR-C ships behind a notifier feature flag (`face_rules.enabled`) so the
-operator can roll the recognizer out and watch its rows for a week
-before changing notification behavior.
+PR-C ships behind a notifier feature flag (`face_recognition.face_rules_enabled`,
+default false) so the operator can roll the recognizer out and watch
+its rows for a week before changing notification behavior.
 
 ---
 
