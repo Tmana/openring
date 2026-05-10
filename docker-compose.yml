@@ -119,6 +119,7 @@ services:
       AUTH_DB_PATH: /data/auth.db
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       DETECTION_HMAC_KEY: ${DETECTION_HMAC_KEY:-}
+      OPENRING_AUDIO_KEY: ${OPENRING_AUDIO_KEY:-}     # v0.3: mints audio session JWTs
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
       interval: 30s
@@ -190,6 +191,11 @@ services:
       AUTH_DB_PATH: /data/auth.db
       OPENRING_AUDIO_KEY: ${OPENRING_AUDIO_KEY:-}
       LOG_LEVEL: info
+    # Direct port exposure for v0.3 — Caddy is broken in main today
+    # (config/caddy-entrypoint.sh missing from the upstream port).
+    # Once Caddy works, drop this and route /audio/* through it.
+    ports:
+      - "${AUDIO_RELAY_PORT:-8765}:8765"
     volumes:
       - openring-data:/data:ro            # ro — only reads device_tokens
     depends_on:
@@ -202,7 +208,6 @@ services:
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
-    # Caddy will proxy /audio/* to this container in PR-B; not exposed externally.
 
   # ── Notifier ─────────────────────────────────────────────────────────
   notifier:

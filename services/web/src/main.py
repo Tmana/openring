@@ -18,6 +18,7 @@ from routes import (
     about,
     actuations,
     admin,
+    audio,
     audit_log,
     backups,
     config,
@@ -635,3 +636,4 @@ app.include_router(deterrent.router)
 app.include_router(actuations.router)
 app.include_router(backups.router)
 app.include_router(doorbell.router)
+app.include_router(audio.router)

@@ -1039,3 +1039,34 @@ body.expert-mode details.expert-only { display: block !important; }
   height: auto;
   background: #000;
 }
+
+/* v0.3: push-to-talk + listen buttons in the snapshot overlay */
+.snapshot-overlay__audio {
+  display: flex;
+  gap: 0.4em;
+  margin-left: 0.5em;
+}
+.snapshot-overlay__audio-btn {
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  padding: 0.3em 0.7em;
+  cursor: pointer;
+  font-size: 0.85rem;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.snapshot-overlay__audio-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+.snapshot-overlay__audio-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.snapshot-overlay__audio-btn.is-hot {
+  background: rgba(224, 92, 92, 0.35);
+  border-color: var(--danger, #e05c5c);
+  color: #fff;
+  box-shadow: 0 0 0 2px rgba(224, 92, 92, 0.4);
+}
