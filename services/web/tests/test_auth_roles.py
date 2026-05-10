@@ -19,12 +19,30 @@ import pytest
 
 
 @pytest.fixture
-def fresh_auth():
-    """Yield the auth module bound to a brand-new temp DB."""
+def fresh_auth(monkeypatch):
+    """Yield the auth module bound to a brand-new temp DB.
+
+    Uses ``monkeypatch.setenv`` so the AUTH_DB_PATH env mutation is
+    auto-restored on teardown.  Issue #20: the previous version of this
+    fixture used a bare ``os.environ[...] = ...`` assignment without
+    restoration, leaking the temp path into every subsequent test in the
+    session.  In particular ``test_doorbell_routes.py`` then init'd
+    auth tables at the leaked tempfile path while route handlers still
+    queried the original conftest path captured at module-import time
+    by ``services/web/src/routes/doorbell.py:AUTH_DB_PATH``, surfacing
+    as 12 spurious "no such table: device_tokens" failures.
+
+    The ``importlib.reload(auth)`` is still required because the module-
+    level ``AUTH_DB_PATH = os.environ.get(...)`` and the function default
+    args bind to that constant at import time; without a reload, the
+    fixture's path change wouldn't be picked up.  monkeypatch reverts the
+    env var, and a teardown reload here restores ``auth.AUTH_DB_PATH`` to
+    the conftest value so the next test sees a clean module state.
+    """
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     os.unlink(path)  # init_db will create it
-    os.environ["AUTH_DB_PATH"] = path
+    monkeypatch.setenv("AUTH_DB_PATH", path)
     import auth  # noqa: WPS433
 
     importlib.reload(auth)
@@ -34,13 +52,18 @@ def fresh_auth():
         os.unlink(path)
     except FileNotFoundError:
         pass
+    # Restore auth module state for downstream tests.  monkeypatch.setenv
+    # has already restored os.environ; reload re-binds AUTH_DB_PATH and
+    # the function default args to the conftest value.
+    importlib.reload(auth)
 
 
 @pytest.fixture
-def legacy_auth():
+def legacy_auth(monkeypatch):
     """Yield the auth module bound to a temp DB that mimics a pre-v0.12.7 schema.
 
     The users table exists but has NO ``role`` column — migration fills it.
+    Same env-var-isolation contract as ``fresh_auth`` above (issue #20).
     """
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
@@ -64,7 +87,7 @@ def legacy_auth():
     conn.commit()
     conn.close()
 
-    os.environ["AUTH_DB_PATH"] = path
+    monkeypatch.setenv("AUTH_DB_PATH", path)
     import auth  # noqa: WPS433
 
     importlib.reload(auth)
@@ -74,6 +97,7 @@ def legacy_auth():
         os.unlink(path)
     except FileNotFoundError:
         pass
+    importlib.reload(auth)
 
 
 class TestRoleMigration:
