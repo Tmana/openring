@@ -123,11 +123,14 @@ gen_hmac_key() {
 }
 
 write_env() {
-    local redis_pw hmac_key
+    local redis_pw hmac_key audio_key
     redis_pw="$(gen_redis_password)"
     hmac_key="$(gen_hmac_key)"
+    # v0.3 audio JWT signing key — same shape as DETECTION_HMAC_KEY
+    # (base64 32 bytes), separate var so rotation is independent.
+    audio_key="$(gen_hmac_key)"
     if [[ "$DRY_RUN" -eq 1 ]]; then
-        info "would write ${ENV_FILE} with newly-generated REDIS_PASSWORD + DETECTION_HMAC_KEY"
+        info "would write ${ENV_FILE} with newly-generated REDIS_PASSWORD + DETECTION_HMAC_KEY + OPENRING_AUDIO_KEY"
         return
     fi
     umask 077
@@ -136,10 +139,12 @@ write_env() {
 #
 # OpenRing host-stack secrets.  Keep this file out of version control.
 # Anyone with read access to .env can sign events on the internal Redis
-# bus, so guard it the way you'd guard /etc/shadow.
+# bus or mint audio-session JWTs, so guard it the way you'd guard
+# /etc/shadow.
 
 REDIS_PASSWORD=${redis_pw}
 DETECTION_HMAC_KEY=${hmac_key}
+OPENRING_AUDIO_KEY=${audio_key}
 
 # Optional — uncomment + set if you want to pull pre-built images from
 # GHCR instead of 'docker compose build'.

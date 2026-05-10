@@ -30,9 +30,7 @@ import signal
 import subprocess
 import sys
 
-# These imports come from a vendored copy of frames.py installed
-# alongside common.py during pi-setup.  See FILES note at bottom.
-from common import load_settings  # type: ignore[import-not-found]
+import websockets
 from audio_frames import (  # type: ignore[import-not-found]
     Audio,
     Error,
@@ -45,10 +43,11 @@ from audio_frames import (  # type: ignore[import-not-found]
     decode,
     encode_audio,
     encode_hello,
-    encode_state,
 )
 
-import websockets
+# These imports come from a vendored copy of frames.py installed
+# alongside common.py during pi-setup.  See FILES note at bottom.
+from common import load_settings  # type: ignore[import-not-found]
 
 logger = logging.getLogger(__name__)
 

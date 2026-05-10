@@ -77,6 +77,7 @@
 {% endif %}
 
 <script src="https://unpkg.com/htmx-ext-sse@2.2.1/sse.js" defer></script>
+<script src="/static/audio.js" defer></script>
 <script>
 var OPENRING_TARGET_CLASSES = {{ target_classes | tojson | safe }};
 
@@ -196,6 +197,112 @@ document.addEventListener('click', function(e) {
       }
     });
     header.appendChild(clipBtn);
+  }
+
+  // v0.3: Talk (push-to-talk) and Listen toggles, only for events tied
+  // to a paired doorbell device (cameraName matches the device_id by
+  // convention from PR #4).  Falls back to a disabled button with a
+  // tooltip if the browser doesn't speak WebCodecs.
+  if (cameraName && window.OpenRingAudio) {
+    var audioBtns = document.createElement('div');
+    audioBtns.className = 'snapshot-overlay__audio';
+    audioBtns.addEventListener('click', function(ev) { ev.stopPropagation(); });
+
+    var talkBtn = document.createElement('button');
+    talkBtn.type = 'button';
+    talkBtn.className = 'snapshot-overlay__audio-btn snapshot-overlay__talk';
+    talkBtn.textContent = '🎙 Talk';
+    var listenBtn = document.createElement('button');
+    listenBtn.type = 'button';
+    listenBtn.className = 'snapshot-overlay__audio-btn snapshot-overlay__listen';
+    listenBtn.textContent = '🔊 Listen';
+
+    if (!window.OpenRingAudio.supported()) {
+      [talkBtn, listenBtn].forEach(function(b) {
+        b.disabled = true;
+        b.title = 'Audio requires WebCodecs (Chrome 94+, Safari 17+, Firefox 130+)';
+      });
+    } else {
+      var audioClient = null;
+
+      async function ensureConnected() {
+        if (audioClient) return audioClient;
+        talkBtn.disabled = listenBtn.disabled = true;
+        try {
+          audioClient = await window.OpenRingAudio.connectFor(cameraName);
+        } finally {
+          talkBtn.disabled = listenBtn.disabled = false;
+        }
+        audioClient.on('error', function(e) {
+          console.warn('audio error', e);
+          talkBtn.classList.remove('is-hot');
+          listenBtn.classList.remove('is-hot');
+        });
+        audioClient.on('closed', function() {
+          audioClient = null;
+          talkBtn.classList.remove('is-hot');
+          listenBtn.classList.remove('is-hot');
+        });
+        return audioClient;
+      }
+
+      // Push-to-talk on mousedown / touchstart, release on up / blur.
+      // mouseleave also releases — operators slide off the button without
+      // realizing it's still hot otherwise.
+      var holding = false;
+      async function pressDown(ev) {
+        ev.preventDefault();
+        if (holding) return;
+        holding = true;
+        try {
+          var c = await ensureConnected();
+          await c.takeFloor();
+          talkBtn.classList.add('is-hot');
+        } catch (e) {
+          holding = false;
+          talkBtn.classList.remove('is-hot');
+          alert('Talk failed: ' + e.message);
+        }
+      }
+      async function pressUp() {
+        if (!holding) return;
+        holding = false;
+        talkBtn.classList.remove('is-hot');
+        if (audioClient) {
+          try { await audioClient.releaseFloor(); } catch (e) {}
+        }
+      }
+      talkBtn.addEventListener('mousedown', pressDown);
+      talkBtn.addEventListener('touchstart', pressDown);
+      talkBtn.addEventListener('mouseup', pressUp);
+      talkBtn.addEventListener('touchend', pressUp);
+      talkBtn.addEventListener('mouseleave', pressUp);
+      window.addEventListener('blur', pressUp);
+
+      // Listen toggle — clicking enters listen mode (browser holds the
+      // floor for the OTHER direction so the Pi mic is open).  v0.3:
+      // toggling Listen tells the Pi "you take the floor"; the relay
+      // forwards the take-floor on behalf of the browser, and the Pi's
+      // audio_relay.py opens its mic.
+      listenBtn.addEventListener('click', async function() {
+        try {
+          var c = await ensureConnected();
+          if (listenBtn.classList.contains('is-hot')) {
+            await c.releaseFloor();
+            listenBtn.classList.remove('is-hot');
+          } else {
+            await c.takeFloor();   // Browser claims floor; Pi mic opens.
+            listenBtn.classList.add('is-hot');
+          }
+        } catch (e) {
+          alert('Listen failed: ' + e.message);
+        }
+      });
+    }
+
+    audioBtns.appendChild(talkBtn);
+    audioBtns.appendChild(listenBtn);
+    header.appendChild(audioBtns);
   }
 
   if (eventId) {
