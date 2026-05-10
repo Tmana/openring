@@ -179,8 +179,10 @@ import http.cookiejar, urllib.request
 jar = http.cookiejar.CookieJar()
 opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
-# Seed the csrf_token cookie.
-opener.open('http://localhost:8080/', timeout=5).read()
+# Seed the csrf_token cookie.  /login is a public page that the
+# csrf middleware always issues a token cookie on, and unlike GET /
+# it doesn't depend on any application state being warmed up first.
+opener.open('http://localhost:8080/login', timeout=5).read()
 csrf = next((c.value for c in jar if c.name == 'csrf_token'), '')
 if not csrf:
     raise SystemExit('no csrf_token cookie issued by GET /')
