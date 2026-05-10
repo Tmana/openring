@@ -157,10 +157,16 @@ calls anywhere.
   `openring:enrollment` and computes embeddings on the sidecar so
   dlib stays out of the web image. A startup catch-up sweep makes the
   flow tolerant to a recognizer restart mid-enrollment.
-- [ ] **#25: Notification template extension.** The notifier learns
+- [x] **#25: Notification template extension.** The notifier learns
   to render "Sarah is at the front door" when a match clears the
   similarity threshold; falls back to "Person at the front door"
-  otherwise.
+  otherwise. Also implements per-label `face_recognition.rules` with
+  suppression (`channels: []`) and escalation (multi-channel + optional
+  `priority: high`). Coalescence buffer (default 2 s) holds detection
+  events long enough for the recognizer to weigh in. Gated by
+  `face_recognition.face_rules_enabled` (default false) so operators
+  can roll the recognizer out and observe before changing alert
+  behavior.
 - [ ] **#26: Privacy hardening.** Off by default. Documented in
   `docs/FACE_RECOGNITION.md` with a clear "this is yours, you
   manage who's in your address book."

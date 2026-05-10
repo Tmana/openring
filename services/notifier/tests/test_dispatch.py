@@ -185,6 +185,69 @@ class TestDispatchRouting:
         dispatch(SAMPLE_EVENT, [failing, ok])
         ok.send.assert_called_once_with(SAMPLE_EVENT)
 
+    def test_face_rule_suppression_at_dispatch(self):
+        """End-to-end: a recognition + suppress rule blocks all fan-out."""
+        from main import dispatch
+
+        notifier = MagicMock()
+        notifier.name = "phone-ntfy"
+        event = {
+            **SAMPLE_EVENT,
+            "_recognition": {"status": "matched", "label": "Sarah", "face_id": 1},
+            "_face_rules": [{"label": "Sarah", "channels": []}],
+        }
+        dispatch(event, [notifier])
+        notifier.send.assert_not_called()
+        # Internal handles must not be visible to the notifier even
+        # when fan-out happens — verify they're stripped on the
+        # mutated event dict.
+        assert "_face_rules" not in event
+
+    def test_face_rule_escalation_at_dispatch(self):
+        """End-to-end: a recognition + escalation rule fans out to the
+        named channels and ignores other configured notifiers."""
+        from main import dispatch
+
+        n1 = MagicMock()
+        n1.name = "phone-ntfy"
+        n2 = MagicMock()
+        n2.name = "owner-email"
+        n3 = MagicMock()
+        n3.name = "panic-webhook"
+        n_skip = MagicMock()
+        n_skip.name = "discord-fun"
+        event = {
+            **SAMPLE_EVENT,
+            "_recognition": {"status": "matched", "label": "ex-roommate", "face_id": 9},
+            "_face_rules": [{
+                "label": "ex-roommate",
+                "channels": ["phone-ntfy", "owner-email", "panic-webhook"],
+                "priority": "high",
+            }],
+        }
+        dispatch(event, [n1, n2, n3, n_skip])
+        n1.send.assert_called_once()
+        n2.send.assert_called_once()
+        n3.send.assert_called_once()
+        n_skip.send.assert_not_called()
+        # Priority hint propagates so notifiers can boost urgency.
+        assert n1.send.call_args[0][0]["priority"] == "high"
+
+    def test_face_rule_no_recognition_falls_through(self):
+        """A missing _recognition leaves dispatch on its legacy path."""
+        from main import dispatch
+
+        notifier = MagicMock()
+        notifier.name = "phone-ntfy"
+        event = {
+            **SAMPLE_EVENT,
+            "_face_rules": [{"label": "Sarah", "channels": []}],
+        }
+        # No _recognition attached → face_rules.evaluate returns None →
+        # actions_triggered logic continues unchanged → fan out.
+        dispatch(event, [notifier])
+        notifier.send.assert_called_once()
+
     def test_build_notifiers_discord_channel(self):
         from main import build_notifiers
 
