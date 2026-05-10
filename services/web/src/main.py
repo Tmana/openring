@@ -32,6 +32,7 @@ from routes import (
     training,
 )
 from routes import auth as auth_routes
+from routes import recognizer as recognizer_routes
 from routes import users as users_routes
 
 app = FastAPI(title="OpenRing")
@@ -635,3 +636,4 @@ app.include_router(deterrent.router)
 app.include_router(actuations.router)
 app.include_router(backups.router)
 app.include_router(doorbell.router)
+app.include_router(recognizer_routes.router)

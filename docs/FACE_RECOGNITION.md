@@ -15,7 +15,10 @@ The feature ships in three stacked PRs:
   `services/recognizer/` directory.
 - **PR-B — enrollment UI.** Upload photos, label faces, manage
   enrolled identities. Web admin pages only — no behavior change for
-  alerts.
+  alerts. Web saves photo + `known_faces` row, then publishes
+  `openring:enrollment` (HMAC-signed) asking the recognizer to embed.
+  The recognizer also runs a startup catch-up sweep so a missed
+  message during a recognizer restart self-heals on next boot.
 - **PR-C — notifier rules.** Suppression and escalation. Read the
   recognition results PR-A wrote and let the user wire them to
   per-face channel sets in `openring.yml`.
