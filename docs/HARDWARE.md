@@ -82,3 +82,63 @@ correct fix is your home internet.
 | OpenRing version | Pi model | Camera | Power source | Notes |
 |---|---|---|---|---|
 | v0.1.0-dev | Pi Zero 2 W | Camera Module 3 Wide NoIR | 24 VAC chime → IRM-15-5 | reference build |
+
+## v0.3 audio addendum — tested USB DAC + mic combinations
+
+The Pi Zero 2 W has no native analog audio out, so two-way audio in
+v0.3 requires a USB DAC for the speaker and either a USB mic or an
+I²S mic. ALSA's default device picker is fine if you only have one
+DAC + one mic plugged in; if you have multiple, set the right cards
+in `/etc/asound.conf` before pairing.
+
+The Pi-side firmware shells out to `arecord`, `opusenc`, `opusdec`,
+`aplay` — anything ALSA recognises will work. The matrix below is
+**what the maintainers have actually validated end-to-end**: doorbell
+press → click Talk in the browser → speaker plays the operator's
+voice → hold the talk button for 30s → safety timeout fires cleanly.
+Add a row when you've completed the same loop on different hardware.
+
+| OpenRing version | DAC | Mic | Speaker | Latency (mic→speaker) | Notes |
+|---|---|---|---|---|---|
+| **v0.3.0** *(pending real-hardware validation)* | UGREEN USB-C → 3.5 mm | INMP441 I²S | 1 W 8 Ω salvaged from old laptop | — | reference combo from `docs/HARDWARE.md` |
+
+### Notes on common audio gear
+
+- **UGREEN USB-C audio adapter (~$10).** Plug-and-play with `aplay`.
+  Shows up as `card 1: USB`. Pairs cleanly with any 3.5 mm speaker.
+- **INMP441 I²S MEMS mic (~$8).** Wires to GPIO; needs the
+  `dtoverlay=googlevoicehat-soundcard` line in `/boot/config.txt`
+  (or the equivalent on your distro). Lower noise floor than a USB
+  electret mic; worth the extra setup.
+- **USB-electret combo mics (Anker, etc.).** Easier to set up
+  (single port, plug-and-play `arecord`) but typically picks up more
+  ambient noise and the AGC behaviour varies wildly between vendors.
+- **Bluetooth audio:** *not supported.* `bluez-alsa` adds 100-300 ms
+  of latency on top of the ~150 ms baseline, which makes
+  conversational doorbell use feel sluggish. v0.3 explicitly does
+  wired ALSA only.
+
+### Troubleshooting audio at the door
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `ALSA lib pcm.c: Unknown PCM` in `journalctl -u openring-audio` | Multiple cards, wrong default | `aplay -l` to list cards; set `defaults.pcm.card N` in `/etc/asound.conf` |
+| Speaker plays a click but no voice | Sample-rate mismatch (Pi forced 48 kHz, OpenRing pinned 16 kHz) | The provided unit forces `-r 16000` — confirm your USB DAC supports 16 kHz; most do |
+| Mic stays silent on listen | `arecord` blocked by group permissions | The `openring` user is in the `audio` group via the systemd unit's `SupplementaryGroups=` — confirm with `groups openring` |
+| Loud feedback howl when both ends are open | Half-duplex floor not enforcing | Check `journalctl -u openring-audio` for `floor → …` lines; if you see both PI and BROWSER active, that's a relay bug — file an issue |
+| 30s talk timeout fires immediately | Browser tab is in the background and the operating system suspended timers | Bring the tab to the foreground; it's a known browser tradeoff and not something the relay can override |
+
+### Adding a row
+
+1. Build the doorbell with the audio gear you want to test (or plug
+   it into an existing one).
+2. Pair it as in [QUICKSTART.md](QUICKSTART.md).
+3. Verify the v0.3 acceptance criteria from [AUDIO.md](AUDIO.md)
+   §"v0.3 acceptance criteria":
+   - [ ] Press → notification → Talk → voice on speaker (≤ 250 ms)
+   - [ ] Listen toggle → mic captured to browser
+   - [ ] Tab close mid-talk → Pi recovers within 1 s
+   - [ ] 30 s talk safety timeout fires
+4. Open a PR adding a row to the table above with measured latency
+   (browser dev tools → Network → WebSocket frames timestamps work).
+   Mention any quirks in the Notes column.
