@@ -31,6 +31,7 @@ jobs:
             services/doorbell-firmware/src \
             services/clipper/src \
             services/recognizer/src services/recognizer/tests \
+            services/camera-bridge/src services/camera-bridge/tests \
             shared
 
   # ── Shellcheck (installers) ────────────────────────────────────────────
@@ -122,6 +123,12 @@ jobs:
         run: |
           mypy services/recognizer/src shared \
             --ignore-missing-imports --explicit-package-bases
+      - name: mypy — camera-bridge
+        env:
+          MYPYPATH: services/camera-bridge/src:shared
+        run: |
+          mypy services/camera-bridge/src shared \
+            --ignore-missing-imports --explicit-package-bases
 
   # ── Tests — web ─────────────────────────────────────────────────────────
   test-web:
@@ -173,6 +180,24 @@ jobs:
         env:
           PYTHONPATH: services/clipper/src:shared
         run: pytest services/clipper/tests/ -v
+
+  # ── Tests — camera-bridge ───────────────────────────────────────────────
+  # Bridge tests are pure pyyaml — no ffmpeg, no MediaMTX, no Docker.
+  test-camera-bridge:
+    name: Tests — camera-bridge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install deps
+        run: pip install -r services/camera-bridge/requirements.txt pytest
+      - name: pytest
+        env:
+          PYTHONPATH: services/camera-bridge/src:shared
+        run: pytest services/camera-bridge/tests/ -v
 
   # ── Tests — recognizer ──────────────────────────────────────────────────
   # Recognizer's full stack needs face_recognition (dlib).  We install

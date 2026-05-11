@@ -204,6 +204,28 @@ trusting us.
 
 ---
 
+## v0.6 — Wider camera support
+
+**Goal:** the doorbell isn't the only camera anymore — IP cams,
+USB webcams, and looped video files all work via a single normalized
+source schema.
+
+- [x] **#31: Camera source schema.** `cameras[].source` field with
+  values `pi | ipcam | webcam | file`.  Pre-v0.6 configs without the
+  field default to `ipcam` so existing deployments keep working.
+- [x] **#32: `camera-bridge` sidecar.** MediaMTX-based service that
+  ingests `source: webcam` (Linux v4l2) and `source: file` (ffmpeg
+  loop), serves them as RTSP on the internal Docker network at
+  `rtsp://camera-bridge:8554/<name>`.  IP cams and Pi sources skip
+  the bridge entirely.
+- [x] **#33: `shared/camera_source.py` resolver.** Single source of
+  truth for "which RTSP URL should the detector connect to for this
+  camera entry?".  Used by detector + (future) admin cameras page.
+- [x] **#34: `docs/CAMERAS.md`.** Support matrix, per-source config
+  examples, Windows/macOS gotchas (Docker Desktop USB), troubleshooting.
+
+---
+
 ## v1.0 — "I'd put this on my own porch"
 
 **Goal:** the project is sturdy enough that the maintainers run it on

@@ -88,6 +88,7 @@ ruff check services/detector/src services/web/src \
             services/notifier/src services/doorbell-firmware/src \
             services/clipper/src services/audio-relay/src \
             services/recognizer/src \
+            services/camera-bridge/src \
             shared
 
 # mypy — web
@@ -108,6 +109,11 @@ MYPYPATH=services/doorbell-firmware/src:shared \
 # mypy — recognizer
 MYPYPATH=services/recognizer/src:shared \
   python3 -m mypy services/recognizer/src shared \
+    --ignore-missing-imports --explicit-package-bases
+
+# mypy — camera-bridge
+MYPYPATH=services/camera-bridge/src:shared \
+  python3 -m mypy services/camera-bridge/src shared \
     --ignore-missing-imports --explicit-package-bases
 ```
 
@@ -137,6 +143,7 @@ review prompt is in [CONTRIBUTING.md](CONTRIBUTING.md).
 | `services/doorbell-firmware/` | Pi-side: button, heartbeat, MediaMTX wrapper |
 | `services/audio-relay/` | (v0.3) bidirectional audio bridge |
 | `services/recognizer/` | (v0.4) on-host face recognition sidecar; owns `recognizer.db` |
+| `services/camera-bridge/` | (v0.6) MediaMTX sidecar that ingests USB webcams + video files and serves RTSP to the detector |
 | `shared/` | Cross-service Python (event signing, config watcher, URL safety, atomic ref) |
 | `docs/` | Specs, walkthroughs, reference |
 | `config/` | Default templates (no secrets) |

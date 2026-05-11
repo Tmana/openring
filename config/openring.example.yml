@@ -24,13 +24,53 @@ doorbells:
     # token is hashed and stored in auth.db, not here
     heartbeat_timeout_seconds: 90
 
-# Camera streams (RTSP from each doorbell, plus optionally any
-# standalone IP cameras you also want OpenRing to watch).
+# Camera streams.  Four supported source types — pick one per entry.
+# See docs/CAMERAS.md for the full matrix + troubleshooting.
+#
+#   source: pi       —  Pi Zero 2 W running MediaMTX (v0.1 default).
+#                       Set rtsp_url to the Pi's stream URL.
+#   source: ipcam    —  third-party IP camera (Reolink, Tapo, Hikvision,
+#                       Amcrest, Wyze w/ custom firmware, etc.) speaking
+#                       RTSP natively.  Set rtsp_url to whatever the
+#                       camera's admin panel publishes.
+#   source: webcam   —  USB / wired webcam on the same host as the
+#                       detector.  Set device to /dev/videoN (Linux only;
+#                       Windows + Docker Desktop needs usbipd-win).
+#                       camera-bridge ingests via v4l2 + serves RTSP.
+#   source: file     —  loop a local video file as if it were a live
+#                       camera.  Set file to a path under /data/.
+#                       Cheapest way to demo OpenRing without hardware.
+#
+# Pre-v0.6 configs without a 'source' field are treated as source: ipcam
+# (or 'pi' — they're identical for the detector, the label is purely
+# informational for the admin UI + heartbeat watchdog).
 cameras:
   - name: front-door
+    source: pi
     rtsp_url: "rtsp://openring:CHANGE_ME@openring-doorbell.local:8554/door"
     enabled: true
     resolution: 720
+
+  # Other source-type examples (disabled by default; uncomment + tweak):
+
+  # - name: driveway
+  #   source: ipcam
+  #   rtsp_url: "rtsp://admin:CHANGE_ME@192.168.1.50:554/Streaming/Channels/101"
+  #   enabled: false
+  #   resolution: 720
+
+  # - name: porch
+  #   source: webcam              # Linux host only; see docs/CAMERAS.md
+  #   device: /dev/video0
+  #   enabled: false
+  #   resolution: 720
+
+  # - name: demo
+  #   source: file                # zero-hardware E2E demo path
+  #   file: /data/sample-clips/walking-past.mp4
+  #   loop: true
+  #   enabled: false
+  #   resolution: 720
 
     # Exclusion zones suppress detections whose bbox center falls inside
     # the zone.  Coordinates are NORMALIZED to the frame: x=0,y=0 is the
