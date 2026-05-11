@@ -300,7 +300,17 @@ def run_camera(
     a dedicated RedisPublisher connection.  Stopping the thread is done by
     setting *stop_event*.
     """
+    from camera_source import resolve_rtsp_url
     name = camera_cfg["name"]
+    rtsp_url = resolve_rtsp_url(camera_cfg)
+    if rtsp_url is None:
+        logger.error(
+            "[%s] Camera config has no usable source — must set either "
+            "rtsp_url (ipcam/pi) or source: webcam/file with the matching "
+            "device/file field.  Skipping this camera.",
+            name,
+        )
+        return
 
     redis_password = os.environ.get("REDIS_PASSWORD", "")
     publisher = RedisPublisher(
@@ -308,7 +318,7 @@ def run_camera(
         port=int(redis_cfg.get("port", 6379)),
         password=redis_password or None,
     )
-    stream = RTSPStream(name=name, rtsp_url=camera_cfg["rtsp_url"], stop_event=stop_event)
+    stream = RTSPStream(name=name, rtsp_url=rtsp_url, stop_event=stop_event)
 
     logger.info(
         "[%s] Camera thread starting | frame_skip=%d | model=%s | classes=%s",

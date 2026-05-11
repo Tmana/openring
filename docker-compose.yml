@@ -67,6 +67,37 @@ services:
     cap_drop: [ALL]
     cap_add: [NET_BIND_SERVICE]
 
+  # ── Camera bridge (sidecar) ──────────────────────────────────────────
+  # Bridges non-RTSP camera sources (USB webcams via v4l2, video files
+  # via ffmpeg-loop) into RTSP that the detector consumes uniformly.
+  # IP cameras and Pi-side MediaMTX skip this — the detector connects
+  # to those directly via their own rtsp_url.
+  #
+  # The bridge generates its MediaMTX config from openring.yml at boot.
+  # If no cameras have source=webcam/file, MediaMTX starts with zero
+  # paths (harmless).  See docs/CAMERAS.md.
+  camera-bridge:
+    build:
+      context: .
+      dockerfile: services/camera-bridge/Dockerfile
+    image: openring-camera-bridge:${IMAGE_TAG:-dev}
+    environment:
+      CONFIG_PATH: /config/openring.yml
+    volumes:
+      - openring-config:/config:ro
+      - openring-data:/data:ro
+      # /data/sample-clips/ on the host can be a bind mount when you're
+      # demoing file sources — see docker-compose.override.yml.example.
+    expose:
+      - "8554"
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 1.0
+    pids_limit: 100
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE, SETUID, SETGID]
+
   # ── Detector ─────────────────────────────────────────────────────────
   # GPU support requires the NVIDIA Container Runtime on the host.
   # For CPU-only inference (the typical home-server case) the default

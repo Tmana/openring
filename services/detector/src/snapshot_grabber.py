@@ -108,7 +108,8 @@ class SnapshotGrabber(threading.Thread):
             }))
             return
 
-        rtsp_url = cam_cfg.get("rtsp_url", "")
+        from camera_source import resolve_rtsp_url
+        rtsp_url = resolve_rtsp_url(cam_cfg) or ""
         if not rtsp_url:
             client.publish(result_channel, json.dumps({
                 "ok": False, "error": f"No RTSP URL for camera '{camera_name}'",
