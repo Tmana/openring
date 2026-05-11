@@ -1,0 +1,29 @@
+# Force LF line endings on Linux-bound shell scripts and Dockerfiles.
+# Without this, Windows clones via git for-windows convert .sh files to
+# CRLF on checkout (default core.autocrlf=true), then Docker images
+# COPY them in as-is, and Linux containers fail to exec them with the
+# baffling "exec /app/entrypoint.sh: no such file or directory" — the
+# kernel sees "#!/bin/sh\r" and tries to invoke a literal "/bin/sh\r".
+*.sh                    text eol=lf
+*.bash                  text eol=lf
+Dockerfile              text eol=lf
+*.Dockerfile            text eol=lf
+docker-compose*.yml     text eol=lf
+
+# YAML config templates also have to land on the host volume with LF
+# so the YAML parser doesn't see stray \r at end of every value.
+*.yml                   text eol=lf
+*.yaml                  text eol=lf
+
+# Python source ships through docker COPY into Linux runtimes; keep LF.
+*.py                    text eol=lf
+
+# Don't ever transform binary assets.
+*.png                   binary
+*.jpg                   binary
+*.jpeg                  binary
+*.ico                   binary
+*.pt                    binary
+*.onnx                  binary
+*.zip                   binary
+*.gz                    binary

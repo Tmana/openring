@@ -35,6 +35,7 @@ slow to build because dlib compiles from source.
 ```bash
 git clone https://github.com/Tmana/openring.git
 cd openring
+cp docker-compose.override.yml.example docker-compose.override.yml
 ./setup.sh --no-build
 ```
 
@@ -42,11 +43,26 @@ cd openring
 `setup.sh` builds the full stack including the 3 GB detector image
 which we don't need.
 
+The `docker-compose.override.yml.example` step exposes `web` on port
+8080 to your host (in production, Caddy fronts web on 80/443 and the
+internal port isn't published).  The override is gitignored so you can
+edit it freely.
+
+> **Windows-only gotcha**: the `*.sh` and `*.yml` files in this repo
+> need LF line endings to run inside Linux containers.  The repo's
+> `.gitattributes` enforces this, so a fresh clone is fine.  If you're
+> on an older clone and see `exec /app/entrypoint.sh: no such file or
+> directory` from one of the containers, your scripts have CRLF; fix
+> with `git config core.autocrlf input && git rm --cached -r . && git
+> reset --hard`.
+
+Pass `MSYS_NO_PATHCONV=1` in front of any `docker run -v /something:/in-container` command on Git Bash so MSYS doesn't translate `/config` into a Windows path.
+
 Disable user auth for the demo (so you don't need to copy a bootstrap
 token from the logs):
 
 ```bash
-docker run --rm -v openring-config:/config alpine:3.19 sh -c '
+MSYS_NO_PATHCONV=1 docker run --rm -v openring-config:/config alpine:3.19 sh -c '
   if ! grep -q "auth:" /config/openring.yml; then
     awk "/^system:/ {print; print \"  auth:\"; print \"    enabled: false\"; next} {print}" \
       /config/openring.yml > /config/openring.yml.new

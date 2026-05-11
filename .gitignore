@@ -36,3 +36,10 @@ build/
 # Pi cross-build outputs
 services/doorbell-firmware/build/
 *.deb
+
+# Local docker compose overrides — each operator copies
+# docker-compose.override.yml.example to docker-compose.override.yml
+# and edits to taste (port exposure, mount overlays, dev volumes).
+# Auto-loaded by `docker compose` when present at repo root.
+docker-compose.override.yml
+!docker-compose.override.yml.example
