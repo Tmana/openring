@@ -190,13 +190,14 @@ def build_mediamtx_config(cfg: dict) -> dict:
         "logLevel": "info",
         "logDestinations": ["stdout"],
         "rtspAddress": ":8554",
-        "hlsDisable": True,
-        "webrtcDisable": True,
-        "rtmpDisable": True,
-        "srtDisable": True,
-        # Drop publishUser / readUser auth — bridge is on the internal
-        # Docker network only, never bound to the host.  Detector
-        # reaches it as ``rtsp://camera-bridge:8554/<name>``.
+        # Other protocols (HLS, RTMP, WebRTC, SRT) MediaMTX enables by
+        # default.  We don't try to disable them here — the MediaMTX
+        # 1.x config schema for protocol toggles has churned across
+        # minor versions, so the safer "don't fight upstream" stance
+        # is to rely on Docker network isolation: docker-compose.yml
+        # only ``expose:``s 8554, never the alternative ports.  If a
+        # later threat-model review tightens this, we'd disable in
+        # the config file at that point.
         "paths": paths,
     }
 

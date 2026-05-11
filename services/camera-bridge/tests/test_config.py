@@ -139,12 +139,6 @@ class TestBuildMediamtxConfig:
         cfg = bridge.build_mediamtx_config({})
         assert cfg["paths"] == {}
         assert cfg["rtspAddress"] == ":8554"
-        # All non-RTSP protocols disabled — minimal attack surface
-        # since the bridge sits on the internal Docker network.
-        assert cfg["hlsDisable"] is True
-        assert cfg["webrtcDisable"] is True
-        assert cfg["rtmpDisable"] is True
-        assert cfg["srtDisable"] is True
 
     def test_mixed_sources_only_bridged_pass(self) -> None:
         cfg = bridge.build_mediamtx_config({"cameras": [
