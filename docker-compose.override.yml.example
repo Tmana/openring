@@ -1,0 +1,35 @@
+# Local docker compose override — copy to docker-compose.override.yml
+# (gitignored) at the repo root.  ``docker compose`` auto-merges it
+# whenever it's present, so no extra CLI flags are needed:
+#
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   docker compose up -d web notifier redis
+#
+# This file is meant for *local* developer convenience: exposing ports
+# directly to the host, mounting source for live reload, adding noisy
+# log levels, swapping image tags, etc.  Production deployments should
+# leave the override out and let Caddy front the stack on 80/443.
+
+services:
+  # Expose web's 8080 directly to the host so http://localhost:8080
+  # works without running Caddy.  In production the docker-compose.yml
+  # shape is unchanged; only Caddy (which binds 80/443) reaches web on
+  # the internal Docker network.
+  web:
+    ports:
+      - "8080:8080"
+
+  # Example: bind-mount the web source for live reload during dev.
+  # Uncomment when iterating on routes / templates.  Restart web after
+  # the first activation; subsequent template edits auto-reload.
+  #
+  # web:
+  #   volumes:
+  #     - ./services/web/src:/app/src:ro
+
+  # Example: bind-mount the notifier source so a `docker compose
+  # restart notifier` picks up Python changes without a rebuild.
+  #
+  # notifier:
+  #   volumes:
+  #     - ./services/notifier/src:/app/src:ro
